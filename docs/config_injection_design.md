@@ -2,10 +2,9 @@
 
 **Status:** Implemented (v0.x). Worked example: `examples/with_platform_config.yaml`.
 **Date:** 2026-05-28
-**Solves:** the config-injection gap (shipped fetchers read undeclared config
-env vars that the runner strips) and the ambient-credentials gap (cloud auth
-can't be expressed in the declared-secrets model). See `foundation_review`
-notes in this doc's "Motivation".
+**Solves:** the config-injection gap (fetchers read config env vars that the
+runner's minimal-env whitelist would otherwise strip) and the ambient-credentials
+gap (cloud auth can't be expressed in the declared-secrets model).
 
 ---
 
@@ -22,7 +21,7 @@ config files inside `fetchers/<category>/` — that recreates the `catalog.json`
 
 ---
 
-## Two new homes (both already exist as empty slots)
+## Two homes (both shipped)
 
 ### 1. Platform declaration → `fetchers/_categories/<platform>.yaml`
 
@@ -31,14 +30,12 @@ and auth model. Ships with the repo.
 
 ```yaml
 # fetchers/_categories/aws.yaml
-config_schema:
-  region:
-    type: string
-    required: true
-    env: AWS_DEFAULT_REGION
+# AWS region/profile are per-target (target_schema, see fanout); the category
+# carries the ambient-auth passthrough list instead of category config keys.
 auth:
-  mode: profile                 # profile | env | ambient
-  passthrough_env: []           # ambient vars the runner lets through its whitelist
+  passthrough_env:              # ambient vars the runner lets through its whitelist
+    - AWS_WEB_IDENTITY_TOKEN_FILE
+    - AWS_ROLE_ARN
 ```
 
 ```yaml
@@ -123,9 +120,17 @@ cloud secret provider, or ambient cloud identity).
 
 ## Scope notes
 
-- `config_schema` is already an optional field in `fetcher_schema.json` (free-form
-  today) — this proposal gives it the `<field>.env` sub-key and a platform-level
-  counterpart in `_categories/*.yaml`.
+- `config_schema` is an optional field in `fetcher_schema.json`; the shipped
+  injection uses its `<field>.env` sub-key plus a platform-level counterpart in
+  `_categories/*.yaml`.
 - Fetchers keep reading their env vars exactly as they do now; only the runner's
   env-population path changes. No fetcher code changes required.
-- Independent of the envelope/uploader/comparator work.
+- The merge + injection lives in `executor._build_env` and runs identically
+  whether invoked via the human CLI (`python -m framework.runner run`), the AI
+  CLI (same with `--json`), or the web UI (`python -m framework.web`) — all three
+  front-ends call only `framework.api`, so config injection behaves the same.
+- The `manifest set-platform-config <category> key=value` and
+  `set-passthrough <category> ENV_VAR ...` subcommands of the manifest builder
+  edit the `platforms:` block described above.
+- Independent of (and already integrated with) the envelope/uploader work;
+  comparator `depends_on` remains unhonored.

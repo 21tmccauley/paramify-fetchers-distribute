@@ -2,9 +2,9 @@
 
 Fetchers pull compliance evidence from the tools your organization already runs
 — Okta, AWS, GitLab, SentinelOne, KnowBe4, Kubernetes, Rippling — and write it
-to disk as JSON. A later stage uploads that evidence to Paramify. This repo is
-the fetchers plus the runner that executes them; it does not talk to Paramify
-directly.
+to disk as JSON. A separate uploader stage pushes that evidence to Paramify.
+This repo is the fetchers, the runner that executes them, and the uploader; the
+fetchers themselves never talk to Paramify directly.
 
 There are 56 fetchers across 7 categories today. If you're a GRC or security
 engineer here to add evidence collection for a new control or a new tool, this
@@ -19,27 +19,84 @@ README is for you.
 
 ## How it runs
 
-Three pieces, kept deliberately separate:
+Four pieces, kept deliberately separate:
 
 - **Fetcher** — a small script (`fetcher.py` or `fetcher.sh`) that collects from
   *one* source and writes a JSON file. It reads everything it needs from
   environment variables and writes only to `EVIDENCE_DIR`.
 - **`fetcher.yaml`** — the fetcher's self-description: its name, what secrets and
-  config it needs, what it outputs. Ships with the code, validated against a
-  schema. Customers never edit this.
+  config it needs, what it outputs, and its `evidence_set` identity. Ships with
+  the code, validated against a schema. Customers never edit this.
 - **Run manifest** — the customer's intent: which fetchers to run, with what
   config, against what targets. Lives in the customer's environment, not here.
 - **Runner** — reads `fetcher.yaml` files and a manifest, resolves secrets and
   config into environment variables, and executes each fetcher.
 
+Everything goes through one facade, `framework.api` — discovery, manifest
+editing, validation, and running. Three front-ends sit on top of it and behave
+identically because they share that single code path:
+
 ```bash
-python -m framework.runner list                  # discover + schema-validate every fetcher
-python -m framework.runner validate <manifest>   # validate a manifest without running
-python -m framework.runner run      <manifest>   # run it
+python -m framework.runner <cmd>          # human CLI
+python -m framework.runner <cmd> --json   # same commands, machine-readable (for AI/scripts)
+python -m framework.web                   # web UI (FastAPI single-page app, runs streamed
+                                          # over Server-Sent Events; default 127.0.0.1:8765)
 ```
 
-Output lands in `<output_dir>/run-<timestamp>/`, one JSON file per fetcher (or
-per target for fan-out), alongside a `_run_metadata.json` audit record.
+The CLI command surface:
+
+```bash
+python -m framework.runner list                  # discovered fetchers (flat)
+python -m framework.runner catalog                # categories → fetchers → editable fields
+python -m framework.runner describe <fetcher>     # one fetcher's config / secrets / target fields
+python -m framework.runner validate <manifest>    # validate a manifest without running
+python -m framework.runner run      <manifest>    # run it
+python -m framework.runner manifest <sub>         # build/edit a manifest (see below)
+```
+
+Output lands in `<output_dir>/run-<UTC-timestamp>/`, one JSON file per fetcher
+(or per target for fan-out), alongside a `_run_metadata.json` run index. The
+runner wraps each evidence file in an envelope —
+`{schema_version, metadata, payload}` — where `metadata` carries the fetcher
+name/version/category, run id, target, `collected_at`, status, exit code, and
+the `evidence_set` identity; failed invocations also get a `stderr_tail`. The
+`_run_metadata.json` index itself is not enveloped.
+
+### Building a manifest
+
+`python -m framework.runner manifest <sub>` edits a manifest file in place
+(`-f/--file`, default `./manifest.yaml`). It reads each `fetcher.yaml` and warns
+which secrets and config are still missing until the manifest is runnable.
+
+```bash
+manifest init [--output-dir DIR]                     # start a manifest
+manifest add <fetcher>                               # add a fetcher
+manifest remove <fetcher>
+manifest set-config <fetcher> key=value
+manifest set-secret <fetcher> <secret_name> <ENV_VAR>
+manifest add-target <fetcher> k=v ... [--secret name=ENV_VAR ...]
+manifest set-platform-config <category> key=value
+manifest set-passthrough <category> ENV_VAR ...
+manifest set-output-dir <dir>
+manifest show [--json]
+```
+
+### Collect, then upload
+
+Collection and upload are separate stages on purpose. The runner only collects;
+pushing to Paramify is a second step, run against the enveloped run directory:
+
+```bash
+python -m framework.runner run manifest.yaml         # collect → enveloped JSON in run-<ts>/
+python -m uploaders.paramify_evidence <run-dir>      # upload that run (get-or-create evidence
+                                                     # set by reference_id, multipart artifacts)
+```
+
+The uploader is idempotent within a run, supports `--dry-run` and `--config`,
+talks Paramify REST v0 over HTTPS only, and reads
+`PARAMIFY_UPLOAD_API_TOKEN` (with optional `PARAMIFY_API_BASE_URL`). Chaining
+the two stages is the customer's job, not the runner's; `run_and_upload.sh` at
+the repo root is example glue.
 
 ---
 
@@ -54,7 +111,7 @@ principles keep that from happening again:
 
 - **One contract, schema-enforced.** A fetcher declares itself in `fetcher.yaml`,
   validated at discovery time. Anything not in the schema is not a thing a
-  fetcher can do. This is what lets the runner treat 56 fetchers identically.
+  fetcher can do. This is what lets the runner treat all 56 fetchers identically.
 - **Fetchers run on customer infrastructure**, never Paramify's. So a fetcher
   never assumes a Paramify connection, and the framework owns no scheduling.
 - **Secrets are source-agnostic.** A fetcher reads `OKTA_API_TOKEN` from the
@@ -73,19 +130,24 @@ principles keep that from happening again:
 The full contract is in [`docs/fetcher_contract.md`](docs/fetcher_contract.md);
 the rationale is in [`docs/design.md`](docs/design.md).
 
-> **Status:** pre-1.0 (v0.x). Fetchers still write raw evidence dicts rather than
-> an enveloped `metadata`+`payload` format, and read env directly rather than
-> receiving a typed secrets object — both are tracked interim shortcuts, not the
-> target. See `docs/design.md` for what's deferred.
+> **Status:** pre-1.0 (v0.x). The runner now wraps every output in the
+> `metadata`+`payload` envelope, but fetchers still write raw evidence dicts and
+> read env directly rather than receiving a typed secrets object — both are
+> tracked interim shortcuts, not the target. Comparators (`depends_on`),
+> the `paramify_issues` uploader, and structured exit-code categories (still
+> binary `0`/`1`, plus `124` for a runner timeout-kill) are not built yet. See
+> `docs/design.md` for what's deferred.
 
 ---
 
 ## Repository layout
 
 ```
-framework/                      # the runner, contract, schemas (shared code)
+framework/                      # shared code (facade, runner, contract, schemas)
+  api.py                        # the facade — discovery, manifest edit, validate, run
   schemas/                      # fetcher / manifest / category JSON Schemas
-  runner/                       # list | validate | run
+  runner/                       # human + --json CLI: list | catalog | describe | validate | run | manifest
+  web.py                        # web UI front-end (FastAPI + SSE)
 fetchers/
   _categories/<name>.yaml       # platform-wide config + auth for a category
   _template/                    # copy this to start a new fetcher
@@ -95,9 +157,13 @@ fetchers/
       fetcher.yaml
       fetcher.py | fetcher.sh
       README.md
-comparators/                    # cross-source comparators (scaffold only so far)
-uploaders/                      # push evidence to Paramify (scaffold only so far)
+comparators/                    # cross-source comparators (template only so far)
+uploaders/
+  paramify_evidence/            # push evidence to Paramify (built)
+  paramify_issues/              # stub, not built yet
 examples/                       # sample run manifests
+manifest.yaml                   # working manifest at repo root
+run_and_upload.sh               # example collect→upload glue
 docs/                           # contract, design, playbooks, this guide's deep dives
 ```
 
@@ -242,6 +308,16 @@ per cluster), set `supports_targets: true` and declare a `target_schema`. The
 runner iterates, sets per-target env vars, runs the entry once per target, and
 isolates failures so one bad target doesn't sink the rest. Worked example:
 [`fetchers/gitlab/ci_cd_pipeline_config/`](fetchers/gitlab/ci_cd_pipeline_config/).
+
+All 30 AWS fetchers fan out. Most are **regional** — their `target_schema` takes
+a required `region` and `profile` (a named `~/.aws` profile), runs once per
+`(region, profile)` pair, and writes `aws_<short>_<profile>_<region>.json`. Five
+are **global** and fan out by profile only (`region` optional, defaults
+`us-east-1`, output `aws_<short>_<profile>.json`): `iam_roles`, `iam_policies`,
+`iam_users_groups`, `route53_high_availability`, `s3_encryption_status`. A few
+are mixed-scope and documented as such. AWS auth is the named profile;
+`_categories/aws.yaml` (and `k8s.yaml`) carry `auth.passthrough_env` to let
+ambient IRSA / instance-role vars through the env whitelist.
 
 ---
 

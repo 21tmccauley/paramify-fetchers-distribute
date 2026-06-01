@@ -1,7 +1,8 @@
 # Evidence Envelope — Design
 
 **Status:** Implemented (v0.x, 2026-05-28). `framework/envelope.py` +
-`framework/schemas/envelope_schema.json`; wrapped by the runner in `cmd_run`.
+`framework/schemas/envelope_schema.json`; wrapped from `framework/api.py`'s
+`run` path (the facade behind the CLI, `--json` AI CLI, and web UI).
 **Date:** 2026-05-28
 **Solves:** evidence files are not self-describing and have no common shape, which
 blocks the uploader (and the Wiz fetcher). See [`design.md`](design.md) §"The
@@ -26,7 +27,8 @@ block (the evidence the fetcher actually produced, untouched).
     "target": null,
     "collected_at": "2026-05-28T19:03:38Z",
     "status": "success",
-    "exit_code": 0
+    "exit_code": 0,
+    "evidence_set": { "reference_id": "...", "name": "...", "instructions": "..." }
   },
   "payload": { "...": "the fetcher's raw evidence dict, exactly as written" }
 }
@@ -56,6 +58,7 @@ file self-describing and gives the uploader **one shape** to consume instead of
 | `status` | `success`\|`failed` | derived from `exit_code` | Did collection succeed |
 | `exit_code` | int | runner | Raw exit code (incl. 124 = timeout) |
 | `error` | string (optional) | runner | Bounded stderr tail; present only when `status` = `failed` |
+| `evidence_set` | object (optional) | fetcher.yaml | `reference_id`/`name` (+ `instructions`/`description` when present) for uploader routing; present when the fetcher declares one |
 
 `schema_version` (top level) versions the envelope format itself, so it can
 evolve without breaking consumers.
@@ -97,7 +100,7 @@ each JSON output file:
 
 `_run_metadata.json` is the run-level index and is **not** itself enveloped.
 
-Sketch (new `framework/envelope.py`, called from `cmd_run` per result):
+As built (`framework/envelope.py`, called from `framework/api.py`'s run path per result):
 
 ```python
 def wrap_outputs(result, fetcher, run_id, run_dir):
@@ -113,6 +116,8 @@ def wrap_outputs(result, fetcher, run_id, run_dir):
     }
     if result.exit_code != 0 and result.stderr:
         meta["error"] = result.stderr[-_ERR_TAIL:]
+    if fetcher.evidence_set:                # reference_id/name (+instructions/description)
+        meta["evidence_set"] = {...}
     for name in result.outputs:
         path = run_dir / name
         if not name.endswith(".json"):
@@ -143,29 +148,30 @@ def wrap_outputs(result, fetcher, run_id, run_dir):
 
 ## Validation
 
-Fill the (currently empty) `framework/schemas/envelope_schema.json` with the
-structure above (`schema_version`, `metadata` with required attribution fields,
-`payload`). The runner can validate each enveloped file against it in tests; the
-uploader validates on read. Implementation goes in the (currently empty)
-`framework/envelope.py`.
+`framework/schemas/envelope_schema.json` holds the structure above
+(`schema_version`, `metadata` with required attribution fields, `payload`).
+The runner can validate each enveloped file against it in tests; the uploader
+validates on read. The wrapping itself lives in `framework/envelope.py`.
 
 ---
 
 ## Rollout
 
-- Default on once implemented — nothing downstream consumes the raw files yet, so
-  there's no migration. Old run directories keep their pre-envelope files; only
-  new runs are enveloped.
-- Update `fetcher_contract.md`: the "Output is a raw evidence dict, not
-  envelope-wrapped" interim clause becomes "the runner wraps fetcher output in an
-  envelope; fetchers still emit raw payloads."
-- Update `run_manifest_reference.md`'s output-layout section to show enveloped files.
+- Default on — nothing downstream consumed the raw files before this, so there's
+  no migration. Old run directories keep their pre-envelope files; only new runs
+  are enveloped.
+- `fetcher_contract.md` reflects this: fetchers emit a raw evidence dict and the
+  runner wraps each output in the envelope.
+- `run_manifest_reference.md`'s output-layout section shows enveloped files.
 
 ## What it unblocks
 
-- **Uploader** — one shape to read; `metadata` says what/where to push, `payload`
-  is the evidence.
-- **Wiz fetcher** — blocked on the uploader stage, which this is the prerequisite for.
+- **Uploader** — one shape to read; `metadata` (incl. `evidence_set`) says
+  what/where to push, `payload` is the evidence. The `paramify_evidence`
+  uploader now consumes enveloped run dirs directly.
+- **Wiz fetcher** — still blocked on the issues-upload stage
+  (`uploaders/paramify_issues/` is an empty stub), but the evidence-envelope
+  prerequisite is in place.
 - **Portable evidence** — any file is self-attributing outside its run dir (audit,
   re-upload, hand-off).
 

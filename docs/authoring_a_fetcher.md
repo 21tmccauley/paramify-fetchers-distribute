@@ -56,9 +56,51 @@ secrets:
 
 Add one `secrets[]` entry per env var the fetcher reads at runtime.
 
+### `evidence_set` (required identity block)
+
+Every fetcher carries an `evidence_set` block — the Paramify evidence-set identity (1 fetcher = 1 evidence set). This is fetcher-knowledge (what the evidence is and how it's collected); the runner copies it into the output envelope's `metadata`, and the uploader get-or-creates the evidence set by `reference_id`.
+
+```yaml
+evidence_set:
+  reference_id: EVD-<CATEGORY>-<SHORT>   # stable idempotency key, e.g. EVD-OKTA-PHISHING-MFA
+  name: <Human-readable display name>
+  instructions: <optional — what the fetcher runs / how the evidence is produced>
+```
+
+`reference_id` and `name` are required; `instructions` is optional. Customers override `reference_id` per compliance program in the uploader config — they never edit this block. Do **not** add `controls`/`solution_capabilities` here; that linkage stays Paramify-side.
+
 ### Fanout (when one fetcher should run against N targets)
 
-If the fetcher should be invoked once per target (per AWS region, per GitLab project, per K8s cluster, etc.):
+If the fetcher should be invoked once per target (per AWS region+profile, per GitLab project, per K8s cluster, etc.), the runner expands the manifest's targets and invokes the fetcher once per target, setting each `target_schema.<field>.env` var for that invocation.
+
+**AWS-style fanout** is the most common shape. Every AWS fetcher fans out; the regional ones take a `region`/`profile` pair per invocation:
+
+```yaml
+supports_targets: true
+
+target_schema:
+  region:
+    type: string
+    required: true
+    env: AWS_DEFAULT_REGION    # runner sets this env var per target
+    description: AWS region to collect from.
+  profile:
+    type: string
+    required: true
+    env: AWS_PROFILE
+    description: AWS named profile (credentials resolved from ~/.aws / SSO).
+
+output:
+  type: json
+  path: aws_<short_name>.json    # base; the fetcher appends a per-target suffix
+  aggregation: per_target         # one envelope per target
+
+secrets: []                       # AWS creds come from the named profile, not a declared secret
+```
+
+Global AWS fetchers (IAM, S3 encryption, Route 53) make `region` optional (default `us-east-1`) so they fan out per-profile only.
+
+For an API-token-based source like GitLab, the targets carry their own identifiers and a per-target secret:
 
 ```yaml
 supports_targets: true
@@ -67,36 +109,41 @@ target_schema:
   project_id:
     type: string
     required: true
-    env: <UPPER_CASE_VAR>      # runner sets this env var per target
-    description: ...
+    env: GITLAB_PROJECT_ID
   url:
     type: string
     required: true
-    env: <UPPER_CASE_VAR>
+    env: GITLAB_URL
   branch:
     type: string
     required: false
     default: main
-    env: <UPPER_CASE_VAR>
+    env: GITLAB_BRANCH
 
 output:
   type: json
-  path: <category>_<short_name>.json   # base; the fetcher appends a per-target suffix
-  aggregation: per_target               # one envelope per target
+  path: <category>_<short_name>.json
+  aggregation: per_target
 
 secrets:
   - name: api_token
-    env: <UPPER_CASE_TOKEN>
+    env: GITLAB_API_TOKEN
     per_target: true                    # different token per target
 ```
 
-See [`fetchers/gitlab/ci_cd_pipeline_config/fetcher.yaml`](../fetchers/gitlab/ci_cd_pipeline_config/fetcher.yaml) for a complete worked example.
+See [`fetchers/gitlab/ci_cd_pipeline_config/fetcher.yaml`](../fetchers/gitlab/ci_cd_pipeline_config/fetcher.yaml) and [`fetchers/aws/auto_scaling_high_availability/fetcher.yaml`](../fetchers/aws/auto_scaling_high_availability/fetcher.yaml) for complete worked examples.
 
 ### Validate
 
+The CLI's discovery and validation all go through the `framework.api` facade — the same code the `--json` (AI) front-end and the web UI (`python -m framework.web`) call, so behavior is identical everywhere.
+
 ```bash
-python -m framework.runner list   # walks all fetchers; fails if any yaml is schema-invalid
+python -m framework.runner list             # discovered fetchers, flat; fails if any yaml is schema-invalid
+python -m framework.runner catalog          # categories -> fetchers -> editable fields
+python -m framework.runner describe <category>_<short_name>   # your fetcher's config/secrets/target fields
 ```
+
+Run `describe` on your new fetcher to confirm the runner parsed its config, secrets, and target fields the way you intended. Add `--json` to any of these for machine-readable output.
 
 ---
 
@@ -187,7 +234,7 @@ Unit tests aren't yet a convention. The `tests/` directory in the fetcher scaffo
 
 - **Don't build a CLI argument parser** for `--output-dir`, `--profile`, `--region`. Those are runner-era concerns; v0.x fetchers receive everything via env.
 - **Don't import from `common/`** or any cross-category helper module. The framework's secret resolver eventually replaces what those used to do.
-- **Don't write envelope-wrapped output** (with `metadata` + `payload` blocks). Write a raw evidence dict — the runner wraps it in the standard envelope automatically after the invocation (see [`envelope_design.md`](envelope_design.md)).
+- **Don't write envelope-wrapped output** (`{schema_version, metadata, payload}`). Write a raw evidence dict as the payload — the runner wraps each output file in the standard envelope automatically after the invocation, populating `metadata` with the fetcher name/version/category/run_id/target/status and your `evidence_set` block (see [`envelope_design.md`](envelope_design.md)).
 - **Don't add `controls`, `solution_capabilities`, or `validation_rules`** to your `fetcher.yaml`. These were in the old `catalog.json` and were intentionally cut.
 - **Don't add retry logic.** Handle pagination internally; let transient failures bubble up to the failures list and exit code. Retry policy is runner-era.
 - **Don't write per-fetcher tests yet.** Until the framework settles on a testing approach, end-to-end smoke against a real tenant is the verification path.
@@ -200,4 +247,5 @@ When in doubt, mirror the shape of one of these:
 
 - **Single-target Python:** [`fetchers/okta/phishing_resistant_mfa/`](../fetchers/okta/phishing_resistant_mfa/)
 - **Single-target bash:** [`fetchers/okta/authenticators/`](../fetchers/okta/authenticators/)
-- **Fanout Python:** [`fetchers/gitlab/ci_cd_pipeline_config/`](../fetchers/gitlab/ci_cd_pipeline_config/)
+- **Fanout Python (per-target secret):** [`fetchers/gitlab/ci_cd_pipeline_config/`](../fetchers/gitlab/ci_cd_pipeline_config/)
+- **AWS region/profile fanout (bash):** [`fetchers/aws/auto_scaling_high_availability/`](../fetchers/aws/auto_scaling_high_availability/)

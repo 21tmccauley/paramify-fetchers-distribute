@@ -159,6 +159,11 @@ The skill verifies **wiring**, not data — it can't hit the user's real tenant.
    and say plainly: a green smoke test means the wiring is correct, not that it
    collects correct data — that's the user's real-tenant run to confirm.
 
+5. **Wire it into a manifest.** A fetcher on disk does not run until it's in a
+   manifest's `run.fetchers:`. To add it and fill in the secrets/config/targets
+   it needs, use the `wire-manifest` skill (or, quickly:
+   `python -m framework.runner manifest add <fetcher>` then `validate`).
+
 ---
 
 ## Anti-patterns

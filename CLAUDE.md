@@ -6,14 +6,16 @@ customer tools (Okta, AWS, GitLab, etc.) and produce JSON evidence files
 that get uploaded to Paramify.
 
 ## Current state
-Pre-1.0. 56 fetchers ported across 7 categories (okta, aws, sentinelone,
-knowbe4, gitlab, k8s, rippling); the AWS category is complete (30/30);
-v0.x runner built (`framework/runner/`);
-manifest format settled (see `examples/minimal_run.yaml`). Ported fetchers
-are version 0.x and write raw evidence payloads; the runner wraps each output
-file in the standard evidence envelope (`metadata` + `payload`, see
-`docs/envelope_design.md`). See `docs/handoff.md` for the current
-state-of-the-work breakdown and `docs/design.md` for the design rationale.
+Pre-1.0. 56 fetchers ported across 7 categories (aws 30, okta 8, sentinelone 5,
+knowbe4 4, gitlab 3, k8s 3, rippling 3); the AWS category is complete and all
+30 are region/profile fanout. Every fetcher carries an `evidence_set` block
+(reference_id/name/instructions) in its `fetcher.yaml`. v0.x runner built
+(`framework/runner/`); manifest format settled (see `examples/minimal_run.yaml`).
+Ported fetchers are version 0.x and write raw evidence payloads; the runner
+wraps each output file in the standard evidence envelope (`schema_version` +
+`metadata` + `payload`, see `docs/envelope_design.md`). The Paramify evidence
+uploader is built (`uploaders/paramify_evidence/`). See `docs/handoff.md` for
+the current state-of-the-work breakdown and `docs/design.md` for the rationale.
 
 ## Key design decisions
 - Fetchers run on customer infrastructure, not Paramify infra
@@ -53,6 +55,29 @@ through the runner's minimal env whitelist. Every env var a fetcher reads must
 be declared as a secret OR a config field, else the runner strips it. See
 `docs/config_injection_design.md`.
 
+## Front-ends & API facade
+`framework/api.py` is the single facade — discovery, manifest editing,
+validate, and run all go through it. Three front-ends call ONLY
+`framework.api` so behavior is identical: the human CLI
+(`python -m framework.runner`), the AI CLI (same commands with `--json`),
+and the web UI (`python -m framework.web` — FastAPI single-page app, runs
+streamed as Server-Sent Events, default `127.0.0.1:8765`).
+
+CLI surface (`python -m framework.runner <cmd>`, all accept `--json`):
+- `list` — discovered fetchers (flat)
+- `catalog` — categories → fetchers → editable fields
+- `describe <fetcher>` — one fetcher's config/secrets/target fields
+- `validate <manifest>` / `run <manifest>`
+- `manifest <sub>` — build/edit a manifest (`-f/--file`, default
+  `./manifest.yaml`): `init [--output-dir DIR]`, `add <fetcher>`,
+  `remove <fetcher>`, `set-config <fetcher> key=value`,
+  `set-secret <fetcher> <secret> <ENV_VAR>`,
+  `add-target <fetcher> k=v ... [--secret name=ENV_VAR ...]`,
+  `set-platform-config <category> key=value`,
+  `set-passthrough <category> ENV_VAR ...`, `set-output-dir <dir>`, `show`.
+  The builder reads each `fetcher.yaml` and warns which secrets/config are
+  still missing until the manifest is runnable.
+
 ## Conventions
 - Fetcher entry point is `fetcher.py` or `fetcher.sh`
 - Fetcher name in `fetcher.yaml` is globally unique (e.g.
@@ -68,12 +93,16 @@ be declared as a secret OR a config field, else the runner strips it. See
 - Refactoring shared code like okta_iam_core.py (port as-is; one tiny
   additive change for `api_failures` is the exception, not the start of
   a refactor)
-- Uploader integration (separate stage; the envelope it consumes is now
-  built — runner wraps outputs — but the uploader itself is not)
+- Paramify issues uploader (`uploaders/paramify_issues/` is an empty stub;
+  the evidence uploader `uploaders/paramify_evidence/` IS built)
 - Comparators (`depends_on` is in the schema but the runner doesn't
-  honor it yet — no consumer)
+  honor it yet — only `comparators/_template` exists; logger.py, retry.py,
+  dependency_graph.py are still empty stubs)
+- Categories with only a `_categories/<name>.yaml` stub and no ported
+  fetchers: azure, checkov, ssllabs, wiz
+- Aggregate fanout mode (declared in the schema; no fetcher uses it)
 - Structured exit code categories (auth-failure vs. target-unreachable
-  vs. internal); v0.x is binary 0/1
+  vs. internal); v0.x is binary 0/1 (plus 124 = runner timeout-kill)
 
 ## Active conventions
 - v0.x port pattern: see `docs/porting_playbook.md` for the per-fetcher

@@ -156,8 +156,10 @@ The timestamp is ISO-8601 in UTC with `:` replaced by `-` for filesystem safety:
 
 Each evidence file is wrapped by the runner in the standard envelope —
 `{schema_version, metadata, payload}`, where `metadata` carries attribution
-(fetcher name/version, run_id, target, timestamp, status, exit_code) and
-`payload` is the fetcher's raw output. `_run_metadata.json` is the run-level
+(`fetcher_name`, `fetcher_version`, `category`, `run_id`, `target`,
+`collected_at`, `status`, `exit_code`, plus the fetcher's `evidence_set` block
+when present) and `payload` is the fetcher's raw output. Failed invocations also
+carry a `stderr_tail` in the metadata. `_run_metadata.json` is the run-level
 index and is not itself enveloped. See [`envelope_design.md`](envelope_design.md).
 
 ---
@@ -207,11 +209,53 @@ Each invocation is killed if it exceeds its timeout (default 600s; override per 
 
 ## CLI
 
+The runner is a thin command surface over `framework.api`, the shared facade.
+Every command — human CLI, the AI CLI (same commands with `--json`), and the
+web UI (`python -m framework.web`) — goes through that one facade, so behavior
+is identical across front-ends. Nothing in the CLI re-implements discovery,
+validation, manifest editing, or execution.
+
+### Discover
+
 ```bash
-python -m framework.runner list                       # list discovered fetchers
-python -m framework.runner validate <manifest.yaml>   # validate without running
-python -m framework.runner run <manifest.yaml>        # run the manifest
+python -m framework.runner list [--json]              # discovered fetchers (flat)
+python -m framework.runner catalog [--json]           # categories -> fetchers -> editable fields
+python -m framework.runner describe <fetcher> [--json] # one fetcher's config/secrets/target fields
 ```
+
+### Validate / run
+
+```bash
+python -m framework.runner validate <manifest.yaml> [--json]   # validate without running
+python -m framework.runner run <manifest.yaml> [--json]        # run the manifest
+```
+
+`--json` is available on every command and emits machine-readable output for
+the AI CLI; without it you get the human-readable rendering.
+
+### Build / edit a manifest
+
+The `manifest` subcommands read each fetcher's `fetcher.yaml` and write the
+manifest file (`-f`/`--file`, default `./manifest.yaml`). As you go they warn
+which secrets/config are still missing, so you know when the manifest is
+runnable.
+
+```bash
+python -m framework.runner manifest init [--output-dir DIR]
+python -m framework.runner manifest add <fetcher>
+python -m framework.runner manifest remove <fetcher>
+python -m framework.runner manifest set-config <fetcher> key=value
+python -m framework.runner manifest set-secret <fetcher> <secret_name> <ENV_VAR>
+python -m framework.runner manifest add-target <fetcher> k=v ... [--secret name=ENV_VAR ...]
+python -m framework.runner manifest set-platform-config <category> key=value
+python -m framework.runner manifest set-passthrough <category> ENV_VAR [ENV_VAR ...]
+python -m framework.runner manifest set-output-dir <dir>
+python -m framework.runner manifest show [--json]
+```
+
+`set-secret` and `add-target --secret` take the **ENV VAR NAME**, never the
+secret value — the builder writes the `${env:VAR}` reference and the runner
+resolves it from its own environment at run time.
 
 ### `validate` checks
 

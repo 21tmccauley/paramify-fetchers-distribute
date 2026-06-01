@@ -1,7 +1,7 @@
 # Porting Playbook
 
 **Status:** Active procedure for v0.x ports from `paramify/evidence-fetchers`
-**Last updated:** 2026-05-27
+**Last updated:** 2026-06-01
 
 This is the step-by-step procedure for porting an existing fetcher from the old
 `paramify/evidence-fetchers` repo into this repo's new layout. The intent is
@@ -43,7 +43,7 @@ ls fetchers/<category>/_shared/ 2>/dev/null && echo "category has shared code" |
 
 - **`<short_name>`** — source filename minus the `<category>_` prefix and `.py`/`.sh` extension (e.g. `okta_phishing_resistant_mfa.py` → `phishing_resistant_mfa`)
 - **Globally-unique name** — `<category>_<short_name>` (this is the `name:` field in `fetcher.yaml`; the directory is the short_name only)
-- **Fanout?** — if the source iterates over targets internally (loop over projects, regions, hosts) OR env vars look per-target (`*_PROJECT_ID`, `*_REGION_*`), it's a fanout candidate
+- **Fanout?** — if the source iterates over targets internally (loop over projects, regions, hosts) OR env vars look per-target (`*_PROJECT_ID`, `*_REGION_*`), it's a fanout candidate. All 30 AWS fetchers are fanout; see the AWS fanout section below for the region/profile target shape.
 
 ---
 
@@ -110,13 +110,37 @@ Required fields (validated against `framework/schemas/fetcher_schema.json`):
 
 Optional: `category`, `config_schema`, `supports_targets`, `target_schema`, `depends_on`. Plus optional sub-fields used for fanout: `output.aggregation`, `secrets[].per_target`, `target_schema.<field>.env`.
 
+#### `evidence_set` block
+
+Every fetcher now carries an `evidence_set` block tying its output to a Paramify
+evidence set so the uploader can get-or-create it by `reference_id`:
+
+```yaml
+evidence_set:
+  reference_id: <stable id, e.g. KSI-IAM-01>
+  name: <human-readable evidence set name>
+  instructions: <what reviewers should look for>   # optional
+```
+
+Pull `reference_id`/`name`/`instructions` from the upstream catalog when the
+source has a catalog entry. If there's no catalog entry, generate a stable
+`reference_id` and `name` and leave `instructions` empty (this is what
+`aws_rds_tls_configuration`, `okta_authenticators`, and `rippling_devices` do).
+The runner copies `evidence_set` into each output's envelope metadata.
+
 **Verify:**
 
 ```bash
 .venv/bin/python -m framework.runner list
+.venv/bin/python -m framework.runner describe <category>_<short_name>
 ```
 
-Your fetcher should appear with the right runtime and `[fanout]` or `[single]` reflecting `supports_targets`. If `runner list` errors, fix the yaml before continuing.
+Your fetcher should appear in `list` with the right runtime and `[fanout]` or
+`[single]` reflecting `supports_targets`; `describe` echoes back its config,
+secrets, and target fields. If either errors, fix the yaml before continuing.
+Add `--json` to any command for the AI/machine-readable form. The runner, the
+`--json` CLI, and the web UI (`python -m framework.web`) all call the same
+`framework.api` facade, so what `describe` reports is exactly what a run sees.
 
 ### 5. Write the entry script
 
@@ -263,11 +287,23 @@ convenience path, not the canonical one.
 # Directly:
 .venv/bin/python fetchers/<category>/<short_name>/fetcher.py
 
-# Or via the runner with a manifest:
-.venv/bin/python -m framework.runner run path/to/manifest.yaml
+# Or build a manifest and run it through the runner:
+.venv/bin/python -m framework.runner manifest init
+.venv/bin/python -m framework.runner manifest add <category>_<short_name>
+.venv/bin/python -m framework.runner manifest set-secret <category>_<short_name> <secret_name> <ENV_VAR>
+# (the manifest builder warns which secrets/config are still missing until runnable)
+.venv/bin/python -m framework.runner validate manifest.yaml
+.venv/bin/python -m framework.runner run manifest.yaml
 ```
 
-Confirm the JSON file lands in `EVIDENCE_DIR` and the contents look sane.
+A direct invocation writes the raw evidence dict your fetcher produces. A run
+through the runner wraps each output file in an envelope
+(`{schema_version, metadata, payload}`) — `metadata` carries
+`fetcher_name`/`version`/`category`/`run_id`/`target`/`collected_at`/`status`/
+`exit_code` plus your `evidence_set`, and failed invocations get a
+`stderr_tail`. Outputs land in `<output_dir>/run-<UTC-timestamp>/` alongside a
+`_run_metadata.json` index (the index itself is not enveloped). Confirm the
+JSON lands and both the payload and the envelope metadata look sane.
 
 ---
 
@@ -291,9 +327,10 @@ the design we're trying to leave behind.
 - **Don't add `controls`, `solution_capabilities`, or `validation_rules`** to
   `fetcher.yaml`. These were in the old `catalog.json` and were intentionally
   cut. See `design.md` § "Two concerns to revisit later".
-- **Don't add schema fields beyond the minimal set** (no `envelope_version`,
-  no `target_schema`, no `payload_schema`). The minimal schema is deliberate;
-  fields return when their absence causes real friction.
+- **Don't add schema fields the schema doesn't define** (no `envelope_version`,
+  no `payload_schema`, no `controls`). The schema is deliberately minimal;
+  fields return when their absence causes real friction. (`target_schema` *is*
+  in the schema and is required for fanout — see the AWS fanout section.)
 
 ---
 
@@ -349,6 +386,27 @@ These are tracked, not surprises. Don't try to fix them mid-port:
 
 ---
 
+## AWS fanout shape
+
+All 30 AWS fetchers are fanout. AWS auth is a named profile (a `~/.aws`
+profile), so `profile` is a required `target_schema` field on every AWS
+fetcher. There are three flavors:
+
+- **Regional (22 fetchers)** — `target_schema` is `{region required, profile
+  required}`; the runner invokes the fetcher once per `(region, profile)`
+  target and the output filename is `aws_<short>_<profile>_<region>.json`.
+- **Global → profile-only fanout (5 fetchers)** — `iam_roles`, `iam_policies`,
+  `iam_users_groups`, `route53_high_availability`, `s3_encryption_status`.
+  `region` is optional (defaults `us-east-1`); fan out on profile only, output
+  `aws_<short>_<profile>.json`.
+- **Mixed-scope (3 fetchers, flagged not split)** — `backup_validation`,
+  `component_ssl_enforcement_status`, `iam_identity_center` have a global half
+  that duplicates per region. Documented as-is; do not split them.
+
+Ambient cloud creds (IRSA, instance-role vars) come through
+`fetchers/_categories/aws.yaml` (and `k8s.yaml`) via `auth.passthrough_env`,
+which lets those vars past the runner's env whitelist.
+
 ## Reference ports
 
 When in doubt, mirror the shape of one of these:
@@ -359,5 +417,6 @@ When in doubt, mirror the shape of one of these:
 | Single-target Python (self-contained, no shared module) | [`fetchers/sentinelone/agents/`](../fetchers/sentinelone/agents/) |
 | Single-target bash (curl + jq with failure tracking) | [`fetchers/okta/authenticators/`](../fetchers/okta/authenticators/) |
 | Fanout Python (per-target secrets + per-target config fields) | [`fetchers/gitlab/ci_cd_pipeline_config/`](../fetchers/gitlab/ci_cd_pipeline_config/) |
+| Fanout AWS (region+profile target, named profile auth) | [`fetchers/aws/`](../fetchers/aws/) |
 
 For the AI-followable strict-imperative recipe, see [`ai_port_recipe.md`](ai_port_recipe.md).

@@ -3,7 +3,7 @@
 **Status:** Living document — design rationale. For the current state of the
 work (what's ported, what's in progress), see [`handoff.md`](handoff.md).
 **Author:** Tate
-**Last updated:** 2026-05-28
+**Last updated:** 2026-06-01
 
 This document captures the design for a longer-term fetcher framework that supports both internal use and customer/FDE deployment. The near-term path (moving existing fetchers to GitHub Actions with OIDC for internal use) is a separate effort and is not the subject of this doc.
 
@@ -56,7 +56,7 @@ When comparators need prior fetcher output, they read it from the same directory
 
 ## The fetcher contract
 
-Every fetcher must satisfy this interface. **The current stripped-down `fetcher_schema.json` enforces a subset of this — the full contract will be enforced as the framework matures.**
+Every fetcher must satisfy this interface. **`fetcher_schema.json` now enforces config injection, fanout, and evidence-set identity in addition to the original minimal core; the remaining gaps (structured exit codes, in-fetcher envelope authoring) will be enforced as the framework matures.**
 
 ### Input
 
@@ -67,8 +67,8 @@ Every fetcher must satisfy this interface. **The current stripped-down `fetcher_
 
 ### Output
 
-- One or more JSON files in the output directory following a defined **envelope schema** (metadata block + payload block)
-  - Metadata: fetcher name, version, run ID, target identifier, timestamp, status, errors
+- One or more JSON files in the output directory following a defined **envelope schema** (metadata block + payload block) — now built; the runner wraps each output file
+  - Metadata: fetcher name, version, category, run ID, target identifier, timestamp, status, exit code, evidence_set (when present), and a stderr_tail on failure
   - Payload: the actual evidence data
 - A **structured log stream** (stdout JSON lines is fine)
 - An **exit code** with documented meanings (0 = success; non-zero for documented failure categories)
@@ -157,12 +157,51 @@ run:
 
 The runner resolves `${env:VAR_NAME}` references from its own environment. See `examples/minimal_run.yaml` for a working example exercising both single-target and fanout shapes.
 
+Manifests also carry per-category platform settings under `run.platforms.<category>` — a `config` block (literal values merged into every fetcher in that category) and `passthrough_env` (ambient cloud vars allowed through the runner's env whitelist, e.g. IRSA/instance-role vars for AWS and K8s). Customers don't hand-edit manifests blind: the `manifest` builder (below) reads each `fetcher.yaml` and reports which secrets/config a fetcher still needs before it's runnable.
+
 ### Why this split matters
 
 - **Customers never edit fetcher.yaml** — that's your code, your versioned release
 - **Runners never hardcode fetcher specifics** — they read `fetcher.yaml` to know what each fetcher needs and resolve generically
 - **Secrets are referenced by env var name**, so manifests are safe to commit; resolution happens at runtime
 - **The runner is the join point** between code-side contract and customer-side intent
+
+---
+
+## One facade, three front-ends
+
+All operations against the framework — discover fetchers, build/edit a manifest, validate, run — go through a single facade, `framework/api.py`. Three front-ends sit on top of it and call **only** the facade, so their behavior is identical:
+
+1. **Human CLI** — `python -m framework.runner <cmd>`
+2. **AI CLI** — the same commands with `--json` for machine-readable output
+3. **Web UI** — `python -m framework.web`, a FastAPI single-page app (default `127.0.0.1:8765`) that streams runs as Server-Sent Events
+
+Keeping the surface in one facade means a new capability lands once and shows up in all three front-ends, and there's no risk of the CLI and UI drifting.
+
+### CLI command surface
+
+```
+list [--json]                discovered fetchers (flat)
+catalog [--json]             categories → fetchers → editable fields
+describe <fetcher> [--json]  one fetcher's config / secrets / target fields
+validate <manifest> [--json]
+run <manifest> [--json]
+manifest <sub>               build/edit a manifest file (-f/--file, default ./manifest.yaml)
+```
+
+`manifest` subcommands: `init [--output-dir DIR]`, `add <fetcher>`, `remove <fetcher>`, `set-config <fetcher> key=value`, `set-secret <fetcher> <secret_name> <ENV_VAR>`, `add-target <fetcher> k=v ... [--secret name=ENV_VAR ...]`, `set-platform-config <category> key=value`, `set-passthrough <category> ENV_VAR ...`, `set-output-dir <dir>`, `show [--json]`. The builder reads each `fetcher.yaml` and warns which secrets/config are still missing until the fetcher is runnable.
+
+### Execution and the run directory
+
+The executor runs each invocation via `subprocess.Popen` + threads with live stdout streaming (which feeds the web UI's SSE channel) and a per-invocation timeout (default 600s, overridable via `runtime.timeout` in `fetcher.yaml`; a timed-out invocation is killed and reported as exit 124). Each child gets a minimal env whitelist plus the injected config, resolved secrets, and category passthrough vars.
+
+Output lands in `<output_dir>/run-<UTC-timestamp>/`: each evidence file is wrapped in the `{schema_version, metadata, payload}` envelope, and a `_run_metadata.json` (the per-run index, **not** enveloped) records run_id, per-invocation timestamps, durations, exit codes, and outputs.
+
+### Config vs. secrets, concretely
+
+- **Config** is literal values in a *file*: per-fetcher config and `run.platforms.<cat>.config` in the manifest, plus code-side defaults in `fetcher.yaml` `config_schema` and `_categories/<cat>.yaml` `config_schema`. Customers never edit the code-side yaml.
+- **Secrets** are *env*, referenced in the manifest by a `${env:VAR}` placeholder, source-agnostic (`.env`, secret manager, CI — none privileged). The runner resolves them from its own environment.
+- **Injection**: the runner merges category defaults ← platform values ← per-fetcher config, maps them to env vars via each field's `config_schema` `env` mapping, and resolves secrets the same way. `auth.passthrough_env` lets ambient cloud vars through the whitelist.
 
 ---
 
@@ -181,7 +220,7 @@ Two aggregation modes:
 - **`per_target`** — one envelope per target (e.g., one piece of evidence per GitLab repo)
 - **`aggregate`** — fetcher receives the whole target list and emits one combined envelope (e.g., "S3 bucket public access across all buckets")
 
-Both modes are declared via `output.aggregation` in `fetcher.yaml`. The first fanout port (`gitlab_ci_cd_pipeline_config`) uses `per_target`; no `aggregate`-mode fetcher exists yet.
+Both modes are declared via `output.aggregation` in `fetcher.yaml`. Every fanout fetcher to date uses `per_target`; no `aggregate`-mode fetcher exists yet. All 30 AWS fetchers are fanout: 22 are regional (`region` + `profile` targets, one `(region, profile)` per invocation), 5 are global and fan out by `profile` only (`region` optional, defaults `us-east-1`), and 3 are mixed-scope (a global half duplicates per region — documented, not split). GitLab fans out per project; K8s per cluster.
 
 ### Inversion from current model
 
@@ -192,16 +231,19 @@ AWS_REGION_1=us-gov-west-1
 AWS_REGION_1_FETCHERS=iam_roles,guard_duty
 ```
 
-New model groups by fetcher, lists regions as targets:
+New model groups by fetcher, lists regions as targets (AWS targets carry a named `~/.aws` `profile` alongside the region):
 
 ```yaml
 - use: iam_roles
   targets:
     - region: us-gov-west-1
+      profile: gov
     - region: us-east-1
+      profile: commercial
 - use: guard_duty
   targets:
     - region: us-gov-west-1
+      profile: gov
 ```
 
 Isolates failure domains and avoids re-listing fetchers per region.
@@ -238,6 +280,10 @@ Benefits of separation:
 - Re-uploading from a prior run is trivial — point the uploader at an old output directory
 - The Wiz-style case (writing issues back to Paramify, not just evidence) becomes a different uploader, not a hack inside the fetcher
 
+The evidence uploader is built: `uploaders/paramify_evidence/` reads an enveloped run directory, gets-or-creates an evidence set by `reference_id` (Paramify REST v0), multipart-uploads the artifact, and is idempotent within a run. It supports `--dry-run`, `--config`, an https-only token guard, customer `reference_id` overrides, and auth via `PARAMIFY_UPLOAD_API_TOKEN` (+ optional `PARAMIFY_API_BASE_URL` / `--config base_url`). The Wiz-style issues uploader (`uploaders/paramify_issues/`) is still an empty stub.
+
+Orchestration that chains collect → upload is customer-owned, not built into the runner. `run_and_upload.sh` at the repo root is example glue.
+
 ---
 
 ## Repository structure
@@ -249,14 +295,19 @@ paramify-fetchers/
 ├── .gitignore
 │
 ├── framework/                        # contract + runner code
+│   ├── api.py                        # THE FACADE — discovery, manifest edit, validate, run
 │   ├── contract.py                   # dataclasses (Fetcher, Manifest, RunResult, ...)
 │   ├── config_loader.py              # discover fetchers; validate against schema
 │   ├── secret_resolver.py            # ${env:VAR_NAME} resolution
+│   ├── web.py                        # `python -m framework.web` — FastAPI single-page UI (SSE)
 │   ├── runner/
-│   │   ├── __init__.py               # CLI: list / validate / run subcommands
+│   │   ├── __init__.py               # CLI front-end (list/catalog/describe/validate/run/manifest)
 │   │   ├── __main__.py               # entry point for `python -m framework.runner`
 │   │   ├── manifest_loader.py        # load + validate manifests
-│   │   └── executor.py               # single-target + fanout execution
+│   │   ├── executor.py               # subprocess.Popen + threads; streamed stdout; per-invocation timeout
+│   │   ├── logger.py                 # empty stub
+│   │   ├── retry.py                  # empty stub
+│   │   └── dependency_graph.py       # empty stub
 │   └── schemas/
 │       ├── fetcher_schema.json
 │       └── run_manifest_schema.json
@@ -278,14 +329,19 @@ paramify-fetchers/
 │
 ├── comparators/                      # scaffold only (_template/); no comparator ported, runner doesn't honor depends_on
 │
-├── uploaders/                        # scaffold only (empty paramify_evidence/, paramify_issues/ dirs); separate stage, not implemented
+├── uploaders/
+│   ├── paramify_evidence/            # BUILT — get-or-create evidence set + multipart upload
+│   └── paramify_issues/              # empty stub (Wiz-style issues; not built)
 │
 ├── catalog/                          # not built yet (will be GENERATED from fetcher.yaml files)
 │
-├── examples/
+├── examples/                         # sample manifests (minimal_run, multi_region_aws, full_compliance_run, upload.yaml, ...)
 │   └── minimal_run.yaml              # exercises single-target + fanout
 │
-├── requirements.txt                  # python-dotenv, requests, pyyaml
+├── manifest.yaml                     # repo-root sample manifest
+├── run_and_upload.sh                 # repo-root collect→upload example glue
+│
+├── requirements.txt                  # python-dotenv, requests, pyyaml, fastapi/uvicorn
 │
 └── docs/
     ├── design.md                     # this file — design rationale
@@ -349,9 +405,10 @@ progress lives in [`handoff.md`](handoff.md).** Snapshot: 56 fetchers across
 7 categories (okta, aws, sentinelone, knowbe4, gitlab, k8s, rippling); the
 AWS port is complete (30/30). The pieces that make this run:
 
+- **Facade + three front-ends** (`framework/api.py`) — all discovery, manifest editing, validate, and run go through one facade; the human CLI, the `--json` AI CLI, and the FastAPI web UI (`python -m framework.web`, SSE-streamed) all call only the facade
 - **Fetcher schema** (`framework/schemas/fetcher_schema.json`) — supports fanout: `supports_targets`, `target_schema`, `per_target` secrets, `output.aggregation`. Extended additively from the original minimal version.
-- **Runner** (`framework/runner/`) — `list` / `validate` / `run` subcommands, single-target + fanout execution, per-target failure isolation, secret resolution from `${env:...}` references, `_run_metadata.json` recording (run_id, per-invocation timestamps, durations, exit codes, outputs)
-- **Manifest schema** (`framework/schemas/run_manifest_schema.json`) + working example (`examples/minimal_run.yaml`)
+- **Runner** (`framework/runner/`) — `list` / `catalog` / `describe` / `validate` / `run` / `manifest` subcommands (all with `--json`); single-target + fanout execution via `subprocess.Popen` + streamed stdout, per-invocation timeout (default 600s, exit 124 on kill), per-target failure isolation, env-whitelist + config/secret/passthrough injection, secret resolution from `${env:...}` references, envelope wrapping, `_run_metadata.json` recording (run_id, per-invocation timestamps, durations, exit codes, outputs)
+- **Manifest schema** (`framework/schemas/run_manifest_schema.json`) + builder CLI (`manifest` subcommands) + working examples (`examples/minimal_run.yaml`, `multi_region_aws.yaml`, `full_compliance_run.yaml`, ...)
 - **Secret resolver** (`framework/secret_resolver.py`) — `${env:VAR_NAME}` only for v0.x; shape leaves room for future backends (`${aws-secret:...}`, `${vault:...}`)
 - **Conventions established**:
   - Logging: Python `logging` module; bash uses structured `printf` with a matching format
@@ -359,14 +416,21 @@ AWS port is complete (30/30). The pieces that make this run:
   - Output filenames: per_target fetchers derive their own filename from the target identifier
 - **Docs** — see the `docs/` tree above; `handoff.md` is the entry point each session.
 
+Done since the last revision:
+
+- ~~**Envelope schema**~~ — DONE (2026-05-28). The runner wraps each output file in the standard `metadata` + `payload` envelope (metadata carries fetcher/version/category/run_id/target/collected_at/status/exit_code, plus `evidence_set` when present and a `stderr_tail` on failure); fetchers still write raw payloads. See [`envelope_design.md`](envelope_design.md).
+- ~~**Config injection**~~ — DONE. Category defaults ← platform config ← per-fetcher config, injected as env vars via `config_schema` `env` mappings; `auth.passthrough_env` opens the whitelist for ambient cloud vars.
+- ~~**Evidence-set identity**~~ — DONE. Every `fetcher.yaml` carries an `evidence_set` block (reference_id / name / instructions), backfilled from the upstream catalog; it flows into the envelope and drives uploader get-or-create.
+- ~~**Evidence uploader**~~ — DONE. `uploaders/paramify_evidence/` ships (get-or-create by reference_id, multipart upload, idempotent, `--dry-run`, https-only token guard).
+
 What's deferred:
 
-- ~~**Envelope schema**~~ — DONE (2026-05-28). The runner wraps each output file in the standard `metadata` + `payload` envelope; fetchers still write raw payloads. See [`envelope_design.md`](envelope_design.md).
-- **Uploader** — separate stage; empty scaffold dirs exist under `uploaders/` (`paramify_evidence/`, `paramify_issues/`) but no implementation
-- **Comparators** — `comparators/_template/` scaffold exists but no comparator ported; `depends_on` is in the schema but not honored by the runner because nothing consumes it
-- **Structured exit codes** — still binary 0/1. Categorized auth/network/internal/partial codes are contract-era work.
+- **Issues uploader** — `uploaders/paramify_issues/` is an empty stub; the Wiz-style write-issues-back case is not built
+- **Comparators** — `comparators/_template/` scaffold exists but no comparator ported; `depends_on` is in the schema but not honored by the runner because nothing consumes it (`runner/logger.py`, `retry.py`, `dependency_graph.py` are still empty stubs)
+- **Structured exit codes** — still binary 0/1 (plus 124 = runner timeout-kill). Categorized auth/network/internal/partial codes are contract-era work.
 - **Catalog generator** — fetchers self-describe; the derived `catalog.json` walker isn't written yet
 - **`aggregate` mode** — declared in schema; no fetcher uses it yet
+- **Unported categories** — `azure`, `checkov`, `ssllabs`, and `wiz` exist only as `_categories/<name>.yaml` stubs with no ported fetchers
 - **Shared module refactor** — `okta_iam_core.py` still reads env directly (with one tiny additive change: it now exposes `api_failures` for exit-code purposes). Full rework waits on the framework's secret resolver taking over per-fetcher invocation.
 - **Cleanup**: `framework/common/env_loader.py` (3.4KB) is a verbatim copy of the upstream `common/env_loader.py` that we explicitly chose not to port. The runner doesn't import it; it's unused dead weight that should be removed.
 
@@ -400,7 +464,7 @@ Risk to watch: the Actions workflow becoming the de facto deployment model for c
 Honest list — these are real and not yet resolved:
 
 - **Schema evolution.** When `fetcher.yaml` changes between versions, how do existing run manifests handle the change? The schema has already been extended once additively (fanout fields); the harder case — renaming/removing fields with manifests in flight — is still untested.
-- **Long-running fetchers.** Some scans (SSL Labs) take hours. Framework needs a story for timeouts beyond simple subprocess kill.
+- **Long-running fetchers.** Some scans (SSL Labs) take hours. The runner now enforces a per-invocation timeout (default 600s, overridable via `runtime.timeout`; kill → exit 124), but that's still just a kill — there's no story for resumable or async-poll fetchers.
 - **Customer-authored fetchers.** Distribution, validation, sandboxing, trust model all undefined.
 - **Multi-tenancy in a single run.** Can one run touch multiple Paramify programs? Probably not, but worth confirming.
 - **Streaming vs. batch.** Current model is batch. Some use cases (ConMon) want continuous streaming, which is a different paradigm.

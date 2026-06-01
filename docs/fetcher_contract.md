@@ -38,6 +38,7 @@ Every fetcher ships a `fetcher.yaml` in its directory. The schema is enforced; s
 | `secrets[].per_target` | bool | Secret resolved per-target instead of once per fetcher |
 | `target_schema.<field>.env` | string | Env var the runner sets from this field per target |
 | `depends_on` | array | Fetcher names this one depends on (not yet honored by the runner) |
+| `evidence_set` | object | Paramify evidence-set identity: `{reference_id, name, instructions?}`. Carried into envelope metadata and used by the uploader to get-or-create the set. |
 
 ---
 
@@ -93,14 +94,20 @@ Worked example: [`fetchers/gitlab/ci_cd_pipeline_config/fetcher.yaml`](../fetche
 
 ## Schema-level enforcement
 
-Today, validation runs at fetcher discovery time:
+Discovery, validation, and runs all go through the `framework.api` facade. Three front-ends call only that facade — the human CLI (`python -m framework.runner`), the same CLI with `--json` for AI callers, and the web UI (`python -m framework.web`, a FastAPI single-page app streaming runs over Server-Sent Events) — so behavior is identical across them.
+
+The CLI command surface (`python -m framework.runner <cmd>`, each accepting `--json`):
 
 ```bash
-python -m framework.runner list                       # walks fetchers/*/*/fetcher.yaml, validates each
+python -m framework.runner list                       # discovered fetchers (flat); walks fetchers/*/*/fetcher.yaml, validates each
+python -m framework.runner catalog                    # categories -> fetchers -> editable fields
+python -m framework.runner describe <fetcher>         # one fetcher's config/secrets/target fields
 python -m framework.runner validate <manifest.yaml>   # validates a manifest against the schema + against discovered fetchers
+python -m framework.runner run <manifest.yaml>        # collect: enveloped JSON + _run_metadata.json under the output dir
+python -m framework.runner manifest <sub>             # build/edit a manifest file (init/add/remove/set-config/set-secret/add-target/...)
 ```
 
-Both fail with a non-zero exit if any `fetcher.yaml` is schema-invalid. The envelope the runner produces is validated against `envelope_schema.json`, but a fetcher's *runtime* behavior (exit codes, output paths, etc.) is not yet automatically verified — that arrives with integration tests.
+`list`/`validate` fail with a non-zero exit if any `fetcher.yaml` is schema-invalid. The envelope the runner produces is validated against `envelope_schema.json`, but a fetcher's *runtime* behavior (exit codes, output paths, etc.) is not yet automatically verified — that arrives with integration tests.
 
 ---
 
@@ -109,7 +116,7 @@ Both fail with a non-zero exit if any `fetcher.yaml` is schema-invalid. The enve
 These are accepted violations during the porting period. Each is tracked, scoped, and time-limited:
 
 - **Fetchers may read env directly.** v0.x entry scripts call `load_dotenv()` and use `os.getenv()` / shell env access rather than receiving a typed secrets object. The framework's secret resolver replaces this once it takes over per-fetcher invocation. The runner already sets the right env vars for the child; this clause is about the entry script reading them rather than receiving them as arguments.
-- **Fetchers write a raw evidence dict; the runner wraps it.** A fetcher emits its plain payload; the runner wraps each output file in the standard envelope (`metadata` + `payload`) after the invocation. Fetchers don't build the envelope themselves in v0.x. See [`envelope_design.md`](envelope_design.md).
+- **Fetchers write a raw evidence dict; the runner wraps it.** A fetcher emits its plain payload; the runner wraps each output file in the standard envelope `{schema_version, metadata, payload}` after the invocation. `metadata` carries `fetcher_name`/`version`/`category`/`run_id`/`target`/`collected_at`/`status`/`exit_code`, the fetcher's `evidence_set` when present, and a `stderr_tail` on failed invocations. The per-run `_run_metadata.json` index is not enveloped. Fetchers don't build the envelope themselves in v0.x. See [`envelope_design.md`](envelope_design.md).
 - **CLI flags** like Okta's `--skip-check` aren't declarable in the current schema. Treat as interim plumbing; they become `config_schema` entries when the runner is invoking fetchers.
 - **Structured exit codes** are not categorized — only `0` vs. non-zero. Future contract work distinguishes auth-failure, target-unreachable, partial-success, internal.
 - **`output.path` semantics** for per-target fanout (relative filename vs. base name vs. template) aren't pinned by the schema. v0.x convention: the fetcher derives its own per-target filename from the target identifier.

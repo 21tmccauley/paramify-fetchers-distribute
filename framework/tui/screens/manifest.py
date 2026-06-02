@@ -314,6 +314,10 @@ class ManifestPage(Vertical):
             }
             for s in d.get("secrets", []) if not s.get("per_target")
         ]
+        if not config_specs and not secret_specs:
+            hint = " — press 't' to add targets" if d.get("supports_targets") else ""
+            self.notify(f"{use} has no entry-level config or secrets to edit{hint}.")
+            return
         groups = {"config": config_specs, "secrets": secret_specs}
 
         def done(result: Optional[dict]) -> None:

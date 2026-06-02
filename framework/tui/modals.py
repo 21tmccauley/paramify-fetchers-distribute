@@ -71,9 +71,11 @@ class FormModal(ModalScreen[dict]):
                 yield Button("Cancel", id="cancel")
 
     def on_mount(self) -> None:
-        first = self.query(FieldRow).first()
-        if first is not None:
-            first.query_one("#field-input").focus()
+        # .first() raises NoMatches on an empty query, so guard with the count —
+        # a form can legitimately have no fields (nothing to configure).
+        rows = self.query(FieldRow)
+        if rows:
+            rows.first().query_one("#field-input").focus()
 
     @on(Button.Pressed, "#save")
     def action_save(self) -> None:
@@ -179,7 +181,9 @@ class PreviewModal(ModalScreen[None]):
         with Vertical(id="modal-card", classes="wide"):
             yield Label(self._title, id="modal-title")
             with VerticalScroll(id="modal-body"):
-                yield Static(self._text, id="preview-text")
+                # markup off: YAML / evidence JSON contains '[' which would
+                # otherwise be parsed as console-markup tags.
+                yield Static(self._text, id="preview-text", markup=False)
 
     def action_close(self) -> None:
         self.dismiss(None)

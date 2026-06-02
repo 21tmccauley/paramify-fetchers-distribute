@@ -157,7 +157,9 @@ The skill verifies **wiring**, not data — it can't hit the user's real tenant.
 
 4. **Hand back the real-tenant command** for the user to run with real creds,
    and say plainly: a green smoke test means the wiring is correct, not that it
-   collects correct data — that's the user's real-tenant run to confirm.
+   collects correct data — that's the user's real-tenant run to confirm. Once
+   that run produces real evidence, the `suggest-validator` skill can read it and
+   propose a regex validator for the field that proves the control.
 
 5. **Wire it into a manifest.** A fetcher on disk does not run until it's in a
    manifest's `run.fetchers:`. To add it and fill in the secrets/config/targets

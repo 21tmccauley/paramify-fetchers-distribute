@@ -18,6 +18,7 @@ from textual.widgets import Footer, Header, TabbedContent, TabPane
 
 from framework import api
 from framework.tui.screens.catalog import CatalogPage
+from framework.tui.screens.manifest import ManifestPage
 from framework.tui.screens.placeholder import PlaceholderPage
 
 
@@ -49,6 +50,7 @@ class FetcherApp(App):
         # Shared state read by the pages:
         self.root_path: Optional[Path] = None
         self.catalog_data: Optional[dict] = None
+        self.manifest: Optional[dict] = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -56,7 +58,7 @@ class FetcherApp(App):
             with TabPane("Catalog", id="tab-catalog"):
                 yield CatalogPage(id="catalog-page")
             with TabPane("Manifest", id="tab-manifest"):
-                yield PlaceholderPage("Manifest editor", "Phase 2")
+                yield ManifestPage(id="manifest-page")
             with TabPane("Run", id="tab-run"):
                 yield PlaceholderPage("Run console", "Phase 3")
             with TabPane("Evidence", id="tab-evidence"):
@@ -65,6 +67,7 @@ class FetcherApp(App):
 
     def on_mount(self) -> None:
         self._load_catalog()
+        self._load_manifest()
 
     def _load_catalog(self) -> None:
         try:
@@ -78,16 +81,37 @@ class FetcherApp(App):
 
         n = self.catalog_data["fetcher_count"]
         c = len(self.catalog_data["categories"])
-        self.sub_title = f"{self.root_path}  ·  {n} fetchers / {c} categories"
+        self.sub_title = f"{self.manifest_path}  ·  {n} fetchers / {c} categories"
         self.query_one(CatalogPage).rebuild()
+
+    def _load_manifest(self) -> None:
+        try:
+            self.manifest = api.read_manifest(self.manifest_path)
+        except Exception as exc:  # malformed YAML, etc.
+            self.manifest = api.init_manifest()
+            self.notify(f"Manifest unreadable ({exc}); starting a fresh one.", severity="warning")
+        self.query_one(ManifestPage).rebuild()
 
     # -- actions ---------------------------------------------------------- #
 
-    def _go_to_tab(self, tab_id: str) -> None:
+    def _go_to_tab(self, tab_id: str, focus_default: bool = True) -> None:
         # Blur first: Textual reverts an `active` change made while focus is
         # trapped inside the outgoing tab pane, so drop focus before switching.
         self.set_focus(None)
         self.query_one(TabbedContent).active = tab_id
+        # Once the switch settles, focus the new page's primary widget so
+        # keyboard navigation works without an extra click.
+        if focus_default:
+            self.call_after_refresh(self._focus_active_pane)
+
+    def _focus_active_pane(self) -> None:
+        pane = self.query_one(TabbedContent).active_pane
+        if pane is None:
+            return
+        for child in pane.walk_children():
+            if hasattr(child, "focus_default"):
+                child.focus_default()
+                return
 
     def action_go_tab(self, index: int) -> None:
         if 0 <= index < len(self.TAB_IDS):
@@ -102,5 +126,5 @@ class FetcherApp(App):
             self.notify("Catalog reloaded.")
 
     def action_focus_search(self) -> None:
-        self._go_to_tab("tab-catalog")
-        self.query_one(CatalogPage).focus_search()
+        self._go_to_tab("tab-catalog", focus_default=False)
+        self.call_after_refresh(lambda: self.query_one(CatalogPage).focus_search())

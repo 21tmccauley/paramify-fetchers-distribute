@@ -229,6 +229,17 @@ def add_target(
     return m
 
 
+def remove_target(m: dict, use: str, index: int) -> dict:
+    """Remove the fanout target at `index` from a fetcher entry. No-op if the
+    entry or index does not exist."""
+    entry = _find_entry(m, use)
+    if entry is not None:
+        targets = entry.get("targets") or []
+        if 0 <= index < len(targets):
+            del targets[index]
+    return m
+
+
 def _platform(m: dict, category: str) -> dict:
     return _run(m).setdefault("platforms", {}).setdefault(category, {})
 

@@ -29,8 +29,122 @@ CatalogPage {
     padding: 1 2;
 }
 
-/* Placeholder pages (Phases 2-4). */
+/* Placeholder pages (Phases 3-4). */
 .placeholder-text {
     width: auto;
     text-align: center;
+}
+
+/* Manifest editor */
+ManifestPage {
+    height: 1fr;
+}
+
+#manifest-top {
+    height: auto;
+    padding: 1 1 0 1;
+    align: left middle;
+}
+
+#manifest-top .inline-label {
+    width: auto;
+    padding: 1 1 0 0;
+}
+
+#manifest-output-dir {
+    width: 1fr;
+}
+
+#manifest-top Button {
+    margin-left: 1;
+}
+
+#manifest-body {
+    height: 1fr;
+}
+
+#manifest-entries {
+    width: 55%;
+}
+
+#manifest-detail-scroll {
+    width: 1fr;
+    border-left: solid $panel;
+    padding: 0 1;
+}
+
+#manifest-issues {
+    height: auto;
+    border-top: solid $panel;
+    padding: 0 1;
+}
+
+/* Modals */
+ModalScreen {
+    align: center middle;
+}
+
+#modal-card {
+    width: 72;
+    max-width: 90%;
+    height: auto;
+    max-height: 85%;
+    padding: 1 2;
+    background: $surface;
+    border: round $primary;
+}
+
+#modal-card.confirm {
+    width: 60;
+}
+
+#modal-card.wide {
+    width: 110;
+    max-width: 95%;
+    height: 85%;
+}
+
+#modal-title {
+    text-style: bold;
+}
+
+#modal-subtitle {
+    color: $text-muted;
+    padding-bottom: 1;
+}
+
+#modal-body {
+    height: auto;
+    max-height: 24;
+    padding: 1 0;
+}
+
+#modal-buttons {
+    height: auto;
+    align-horizontal: right;
+    padding-top: 1;
+}
+
+#modal-buttons Button {
+    margin-left: 2;
+}
+
+.group-label {
+    text-style: bold;
+    color: $accent;
+    padding-top: 1;
+}
+
+.field-row {
+    height: auto;
+    padding-bottom: 1;
+}
+
+#field-input {
+    width: 1fr;
+}
+
+#picker-list {
+    height: 16;
+    margin-top: 1;
 }

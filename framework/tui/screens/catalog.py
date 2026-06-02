@@ -79,6 +79,9 @@ class CatalogPage(Horizontal):
     def focus_search(self) -> None:
         self.query_one("#catalog-search", Input).focus()
 
+    def focus_default(self) -> None:
+        self.query_one("#catalog-tree").focus()
+
 
 def _matches(fetcher: dict, flt: str) -> bool:
     if not flt:

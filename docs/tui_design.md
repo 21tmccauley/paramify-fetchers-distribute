@@ -1,7 +1,7 @@
 # TUI design — a terminal front-end for paramify-fetchers
 
-Status: **Phase 1 implemented** (`framework/tui/`, read-only catalog browser).
-Phases 2–4 are designed here but not yet built.
+Status: **Phases 1–2 implemented** (`framework/tui/`: catalog browser + manifest
+editor). Phases 3–4 are designed here but not yet built.
 
 This document describes a Textual-based terminal UI for the framework, modeled
 on the architecture of the [Bagels](https://github.com/EnhancedJax/Bagels)
@@ -86,11 +86,19 @@ description / env`). Read-only.
 └──[q]uit  [/]search  [r]efresh ───┴─────────────────────────────────────────────┘
 ```
 
-### 3.2 Manifest editor — `api` mutators + `validate()`  *(Phase 2)*
+### 3.2 Manifest editor — `api` mutators + `validate()`  *(Phase 2, implemented)*
 
-The document is the raw manifest dict held in App state. The page renders a
-generated form per `manifest['run']['fetchers'][]` entry, plus a `platforms`
-section per category and an output-dir field. Field → mutator bindings:
+The document is the raw manifest dict held in App state. The implemented page is
+a `DataTable` of entries (fetcher · mode · secrets set/total · config set/total ·
+targets · status) on the left, a live contract+values detail pane on the right,
+and an `api.validate()` issues bar at the bottom. All editing goes through modals
+→ `api` mutators → `rebuild()`: `a` add fetcher (filterable picker of fetchers not
+yet in the manifest), `e` edit (a form generated from the descriptor — config
+inputs + secret env-name inputs), `t`/`T` add/remove target, `x` remove entry
+(confirm), `s` save, `v` validate, `p` YAML preview. The output-dir is an inline
+input (committed on Enter). The original design (generated form per entry rendered
+inline) is realized as an edit *modal* per entry to avoid focus-loss on partial
+refresh — the same trade-off Bagels makes. Field → mutator bindings:
 
 - `config[]` → typed inputs (Switch for `boolean`, restricted numeric `Input`
   for `integer`, text otherwise; `default` as placeholder) → `set_fetcher_config`.
@@ -202,16 +210,17 @@ Mirrors `framework/web/`'s package shape and honors the "front-ends call ONLY
 framework/tui/
 ├── __init__.py
 ├── __main__.py            # python -m framework.tui [--manifest PATH] [--at ROOT]
-├── app.py                 # FetcherApp(App): TabbedContent, shared state, rebuild fan-out
-├── render.py              # Rich renderers for fetcher descriptors (shared by pages)
+├── app.py                 # FetcherApp(App): TabbedContent, shared state, tab-focus
+├── render.py              # Rich renderers: fetcher contract + manifest-entry detail
+├── modals.py              # FormModal / PickerModal / ConfirmModal / PreviewModal  (Phase 2)
 ├── screens/
 │   ├── catalog.py         # CatalogPage   — api.catalog(root)            (Phase 1)
-│   ├── placeholder.py     # PlaceholderPage — "coming in Phase N"        (Phase 1)
 │   ├── manifest.py        # ManifestPage  — api mutators + validate      (Phase 2)
+│   ├── placeholder.py     # PlaceholderPage — "coming in Phase N"        (Phase 1)
 │   ├── run.py             # RunPage       — api.run(on_event=...)         (Phase 3)
 │   └── evidence.py        # EvidencePage  — run-*/ envelope files         (Phase 4)
 ├── components/            # reusable widgets (REIMPLEMENTED, not copied — see §6)
-│   ├── fetcher_form.py    # FetcherForm/FieldWidget switching on kind+type (Phase 2)
+│   ├── forms.py           # FieldRow (switch on kind+type) + env_name_from_ref (Phase 2)
 │   ├── jumper.py          # id->key map + JumpOverlay                      (Phase 4)
 │   └── status_table.py    # run status DataTable wrapper                   (Phase 3)
 ├── provider.py            # command palette → cross-cutting api.* actions  (Phase 4)
@@ -241,7 +250,13 @@ documented in comments, never derived source.
 
 ## 7. Gaps, risks, and what NOT to do
 
-- **No evidence-browsing API and no cancel hook.** Phases 1–3 require **zero
+- **One small facade addition was needed for Phase 2.** The editor needs to
+  remove a fanout target, but `api` only had `add_target`. Phase 2 added
+  `api.remove_target(m, use, index)` — a tiny, in-place, no-op-on-missing mutator
+  matching the existing helpers, keeping the TUI purely on the facade. (Worth
+  mirroring into the `manifest` CLI subcommands later for parity; not required by
+  the TUI.)
+- **No evidence-browsing API and no cancel hook.** Phase 3 requires **zero
   `framework.api` changes**. Evidence browsing (Phase 4) either reads run dirs
   directly (a presentation concern) or motivates two small additive functions
   (`api.list_runs` / `api.read_evidence`) to stay on the facade. A "stop" button
@@ -252,7 +267,16 @@ documented in comments, never derived source.
 - **Whole-manifest validation, not per-field.** `api.validate` returns strings
   naming the entry/field (e.g. `"<use>: missing secret '<name>'"`), not a
   field-keyed dict. Surface them in a global issues panel; don't over-engineer
-  field-level error routing on day one.
+  field-level error routing on day one. Note the two prefix conventions —
+  `"<use>: …"` for known entries and `"entry[<i>] uses unknown fetcher: …"` for
+  undiscovered ones — the editor buckets both to the right row.
+- **`api.validate` does not check required *target* fields** (only required
+  config and per-target secrets — `api.py`). A fanout target missing e.g.
+  `region`/`profile` is flagged nowhere, so the editor can't rely on `validate()`
+  for targets; it warns at add-target time instead. Adding required-target-field
+  checks to `api.validate` is the proper fix, but it must account for global vs.
+  regional AWS fetchers (global ones are profile-only, no `region`) — a framework
+  change for all front-ends, out of scope for the TUI.
 - **Bagels features that don't apply:** all plotting, budgets, the spinning
   donut, the finance modules, and the entire `models/` + SQLite layer. There is
   no DB — that's a simplification, not a gap.
@@ -265,10 +289,14 @@ optional Phase 4 evidence additions).
 1. **Catalog browser** *(done)* — App shell + read-only browse. `api`:
    `find_repo_root`, `catalog`. Validates the whole shell and the
    "render descriptors directly" assumption.
-2. **Manifest editor** (~1 wk) — declarative `FetcherForm`, add/remove,
-   edit config/secrets/targets/platform/output-dir, live preview, issues panel.
-   `api`: `read_manifest`, `init_manifest`, all mutators, `validate`,
-   `dump_manifest`.
+2. **Manifest editor** *(done)* — entries table + per-entry edit modal
+   (config + secret env-names), add/remove fetchers, add/remove fanout targets,
+   inline output-dir, live `validate()` issues bar, YAML preview, save/load.
+   `api`: `read_manifest`, `init_manifest`, `add_entry`, `remove_entry`,
+   `set_fetcher_config`, `set_secret`, `add_target`, `remove_target` (new),
+   `set_output_dir`, `validate`, `dump_manifest`. (Platform-config editing
+   — `set_platform_config` / `set_passthrough_env` — is deferred to a follow-up;
+   most categories' platform config is optional or has defaults.)
 3. **Run console** (~3–5 days) — status table + streaming log on a Textual
    worker. `api`: `validate` (gate), `run(on_event=...)`. Render `124`→TIMEOUT;
    reuse the web client's validate-before-run / disable-while-running guards.

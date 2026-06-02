@@ -80,3 +80,96 @@ def fetcher_detail(f: dict) -> RenderableType:
 
 def empty_detail(message: Optional[str] = None) -> RenderableType:
     return Text(message or "Select a fetcher to see its contract.", style="dim italic")
+
+
+# --------------------------------------------------------------------------- #
+# Manifest-entry detail: a fetcher's contract overlaid with the values currently
+# set in the manifest (used by the manifest editor, Phase 2).
+# --------------------------------------------------------------------------- #
+
+def _env_name(ref: Any) -> str:
+    s = str(ref or "")
+    if s.startswith("${env:") and s.endswith("}"):
+        return s[len("${env:") : -1]
+    return s
+
+
+def _kv_table(rows: List[tuple]) -> Table:
+    table = Table(box=None, pad_edge=False, expand=True, show_edge=False, show_header=False)
+    table.add_column(style="cyan", no_wrap=True)
+    table.add_column()
+    for name, value in rows:
+        table.add_row(name, value)
+    return table
+
+
+def _status(set_: bool, required: bool) -> Text:
+    if set_:
+        return Text("set", style="green")
+    return Text("required — unset", style="yellow") if required else Text("unset", style="dim")
+
+
+def entry_detail(descriptor: Optional[dict], entry: dict, errors: Optional[List[str]] = None) -> RenderableType:
+    """Render one manifest entry: its current config/secrets/targets vs the contract."""
+    use = entry.get("use", "?")
+    if descriptor is None:
+        return Group(
+            Text(use, style="bold white"),
+            Text("unknown fetcher — not discovered in the catalog", style="yellow"),
+        )
+
+    fanout = descriptor.get("supports_targets")
+    header = Text()
+    header.append(use, style="bold white")
+    header.append("  [fanout]" if fanout else "  [single]", style="dim")
+
+    cfg = entry.get("config") or {}
+    secs = entry.get("secrets") or {}
+    parts: List[RenderableType] = [header, Text()]
+
+    # secrets (non per-target live at entry level)
+    top_secrets = [s for s in descriptor.get("secrets", []) if not s.get("per_target")]
+    if top_secrets:
+        rows = []
+        for s in top_secrets:
+            current = _env_name(secs.get(s["name"]))
+            value = Text(f"${{env:{current}}}", style="green") if current else _status(False, True)
+            rows.append((s["name"], value))
+        parts += [Text("secrets", style="bold"), _kv_table(rows), Text()]
+
+    # config
+    config_fields = descriptor.get("config", [])
+    if config_fields:
+        rows = []
+        for c in config_fields:
+            if c["name"] in cfg:
+                rows.append((c["name"], Text(str(cfg[c["name"]]), style="white")))
+            elif c.get("default") is not None:
+                rows.append((c["name"], Text(f"{c['default']}  (default)", style="dim")))
+            else:
+                rows.append((c["name"], _status(False, c.get("required", False))))
+        parts += [Text("config", style="bold"), _kv_table(rows), Text()]
+
+    # targets
+    if fanout:
+        targets = entry.get("targets") or []
+        parts.append(Text(f"targets ({len(targets)})", style="bold"))
+        if not targets:
+            parts.append(Text("  none — press 't' to add", style="yellow"))
+        for i, t in enumerate(targets):
+            values = {k: v for k, v in t.items() if k != "secrets"}
+            summary = "  ".join(f"{k}={v}" for k, v in values.items()) or "(empty)"
+            line = Text(f"  [{i}] ", style="dim")
+            line.append(summary, style="white")
+            tsec = t.get("secrets") or {}
+            if tsec:
+                line.append("  " + ", ".join(f"{k}→{_env_name(v)}" for k, v in tsec.items()), style="green")
+            parts.append(line)
+        parts.append(Text())
+
+    if errors:
+        parts.append(Text("issues", style="bold red"))
+        for e in errors:
+            parts.append(Text(f"  ✗ {e}", style="yellow"))
+
+    return Group(*parts)

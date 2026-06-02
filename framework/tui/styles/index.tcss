@@ -193,6 +193,17 @@ ModalScreen {
     padding: 1 0;
 }
 
+/* The preview card is tall (85%); its body should fill and scroll, not cap at
+   the 24-row form default that leaves the lower half of the card empty. */
+#modal-card.wide #modal-body {
+    height: 1fr;
+    max-height: 100%;
+}
+
+#preview-text {
+    width: 1fr;
+}
+
 #modal-buttons {
     height: auto;
     align-horizontal: right;

@@ -102,8 +102,12 @@ refresh — the same trade-off Bagels makes. Field → mutator bindings:
 
 - `config[]` → typed inputs (Switch for `boolean`, restricted numeric `Input`
   for `integer`, text otherwise; `default` as placeholder) → `set_fetcher_config`.
-- `secrets[]` → a text input holding the **env-var NAME** (never a value),
-  pre-filled from descriptor `env` → `set_secret` (which stores `${env:VAR}`).
+- `secrets[]` → a text input holding the **env-var NAME** (never a value) →
+  `set_secret` (which stores `${env:VAR}`). Adding a fetcher **auto-wires its
+  entry-level secrets to the suggested env vars** (descriptor `env`), since the
+  default is almost always correct — so a freshly added fetcher is immediately
+  ✓ and the edit form is only needed to override a differing name. (Per-target
+  secrets are not auto-wired: each target usually needs a distinct credential.)
 - targets (if `supports_targets`) → a repeatable sub-form → `add_target`.
 - output-dir → `set_output_dir`; platform config → `set_platform_config` /
   `set_passthrough_env`.

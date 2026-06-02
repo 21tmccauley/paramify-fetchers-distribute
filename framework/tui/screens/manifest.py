@@ -267,10 +267,25 @@ class ManifestPage(Vertical):
             return
 
         def done(name: Optional[str]) -> None:
-            if name:
-                api.add_entry(m, name)
-                self._selected = name
-                self.rebuild()
+            if not name:
+                return
+            api.add_entry(m, name)
+            # Auto-wire entry-level secrets to their suggested env var names: the
+            # default is almost always correct, so the edit form is only needed
+            # for the edge case where a name differs. (Per-target secrets are not
+            # wired here — each target usually needs a distinct credential.)
+            d = self._descriptors().get(name)
+            wired = []
+            if d:
+                for s in d.get("secrets", []):
+                    if not s.get("per_target") and s.get("env"):
+                        api.set_secret(m, name, s["name"], s["env"])
+                        wired.append(s["name"])
+            self._selected = name
+            self.rebuild()
+            if wired:
+                self.notify(f"Added {name} — secrets wired to default env vars (e to change).")
+            else:
                 self.notify(f"Added {name}.")
 
         self.app.push_screen(

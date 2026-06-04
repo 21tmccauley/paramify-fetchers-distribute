@@ -20,13 +20,18 @@ venv/
 # --- Generated collect output (runner writes evidence/run-<timestamp>/) ---
 /evidence/
 
-# --- Local working manifest ---
-# The manifest builder writes ./manifest.yaml by default; canonical samples
-# live in examples/. Delete this line if you want to commit your own manifest.
+# --- Local working manifests ---
+# The manifest builder writes ./manifest.yaml by default; the welcome picker
+# also scans manifests/*.yaml. Both are customer-side working files; canonical
+# samples live in examples/. Delete these lines to commit your own.
 /manifest.yaml
+/manifests/
 
 # --- Claude Code: ignore personal settings, keep shared skills + settings.json ---
 .claude/settings.local.json
+
+# --- TUI design preview renders (regenerable; open locally) ---
+*_mock.svg
 
 # --- macOS / editors ---
 .DS_Store

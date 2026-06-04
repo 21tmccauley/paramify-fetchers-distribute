@@ -26,7 +26,7 @@ import yaml
 
 from framework.config_loader import discover_fetchers, discover_platforms
 from framework.contract import ConfigField, Secret, TargetField
-from framework.envelope import wrap_outputs
+from framework.envelope import is_enveloped, wrap_outputs
 from framework.runner import manifest_loader
 
 _STDERR_TAIL_CHARS = 4000
@@ -229,6 +229,17 @@ def add_target(
     return m
 
 
+def remove_target(m: dict, use: str, index: int) -> dict:
+    """Remove the fanout target at `index` from a fetcher entry. No-op if the
+    entry or index does not exist."""
+    entry = _find_entry(m, use)
+    if entry is not None:
+        targets = entry.get("targets") or []
+        if 0 <= index < len(targets):
+            del targets[index]
+    return m
+
+
 def _platform(m: dict, category: str) -> dict:
     return _run(m).setdefault("platforms", {}).setdefault(category, {})
 
@@ -248,18 +259,22 @@ def set_passthrough_env(m: dict, category: str, env_vars: List[str]) -> dict:
 # on a merely-incomplete manifest)
 # --------------------------------------------------------------------------- #
 
-def validate(manifest: dict, root: Path) -> List[str]:
+def validate(manifest: dict, root: Path, fetchers=None, platforms=None) -> List[str]:
     """Validate a manifest dict against the schema and the discovered fetchers.
 
     Returns a list of human-readable error strings (empty == valid+runnable).
-    Mirrors the checks the runner enforces before executing.
+    Mirrors the checks the runner enforces before executing. `fetchers`/`platforms`
+    may be passed pre-discovered (e.g. when validating many manifests in a loop)
+    to avoid re-scanning the fetcher tree each call.
     """
     errors = manifest_loader.schema_errors(manifest, root)
     if errors:
         return errors  # can't do semantic checks on a structurally-broken manifest
 
-    fetchers = discover_fetchers(root)
-    platforms = discover_platforms(root)
+    if fetchers is None:
+        fetchers = discover_fetchers(root)
+    if platforms is None:
+        platforms = discover_platforms(root)
     parsed = manifest_loader.parse_manifest(manifest)
 
     for i, entry in enumerate(parsed.entries):
@@ -435,3 +450,189 @@ def run(
     }
     emit({"event": "run_complete", **summary})
     return summary
+
+
+# --------------------------------------------------------------------------- #
+# Evidence — read produced run outputs (powers the TUI evidence browser)
+# --------------------------------------------------------------------------- #
+
+def _run_summary(run_dir: Path) -> dict:
+    """Summarize one run-* directory from its _run_metadata.json + output files."""
+    started = completed = None
+    invocations: list = []
+    meta_path = run_dir / "_run_metadata.json"
+    complete = meta_path.exists()
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text())
+            started = meta.get("started_at")
+            completed = meta.get("completed_at")
+            invocations = meta.get("invocations") or []
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    files: list = []
+    seen = set()
+    for inv in invocations:
+        for name in inv.get("outputs") or []:
+            seen.add(name)
+            files.append({
+                "name": name,
+                "path": str(run_dir / name),
+                "fetcher": inv.get("fetcher_name"),
+                "target": inv.get("target"),
+                "exit_code": inv.get("exit_code"),
+            })
+    # Any JSON outputs not recorded in the metadata (e.g. legacy/direct runs).
+    for p in sorted(run_dir.glob("*.json")):
+        if p.name == "_run_metadata.json" or p.name in seen:
+            continue
+        files.append({"name": p.name, "path": str(p), "fetcher": None, "target": None, "exit_code": None})
+    files.sort(key=lambda f: f["name"])
+
+    name = run_dir.name
+    return {
+        "run_id": name[len("run-"):] if name.startswith("run-") else name,
+        "dir": str(run_dir),
+        "started_at": started,
+        "completed_at": completed,
+        "complete": complete,  # False = no _run_metadata.json (run aborted before finishing)
+        "ok": sum(1 for i in invocations if i.get("exit_code") == 0),
+        "fail": sum(1 for i in invocations if i.get("exit_code") not in (0, None)),
+        "files": files,
+    }
+
+
+def list_runs(output_dir) -> List[dict]:
+    """List runs under output_dir, newest first. Each entry summarizes one run-*
+    directory (run_id, timing, complete flag, ok/fail counts, and a per-output-file
+    list joined with its invocation record). Returns [] if the dir is missing.
+
+    A run-* dir with neither metadata nor output files (an aborted run that wrote
+    nothing) is skipped so it doesn't masquerade as a clean empty run; a dir with
+    files but no metadata is kept but flagged complete=False."""
+    base = Path(output_dir).expanduser()
+    if not base.is_absolute():
+        base = Path.cwd() / base
+    base = base.resolve()
+    if not base.is_dir():
+        return []
+    runs = []
+    for d in sorted(base.glob("run-*"), reverse=True):
+        if not d.is_dir():
+            continue
+        summary = _run_summary(d)
+        if not summary["complete"] and not summary["files"]:
+            continue  # pure ghost: nothing was written
+        runs.append(summary)
+    return runs
+
+
+def read_evidence(path) -> dict:
+    """Read one evidence JSON file, normalized. Splits the standard envelope
+    (schema_version/metadata/payload); a raw (un-enveloped) file comes back with
+    metadata={} and the whole object as payload. Raises ValueError if unreadable."""
+    p = Path(path)
+    try:
+        raw = json.loads(p.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        raise ValueError(f"cannot read evidence file {p}: {e}")
+    if is_enveloped(raw):
+        return {
+            "enveloped": True,
+            "schema_version": raw.get("schema_version"),
+            "metadata": raw.get("metadata") or {},
+            "payload": raw.get("payload"),
+        }
+    return {"enveloped": False, "schema_version": None, "metadata": {}, "payload": raw}
+
+
+# --------------------------------------------------------------------------- #
+# Manifests — discover selectable run manifests (powers the welcome screen)
+# --------------------------------------------------------------------------- #
+
+def _manifest_summary(path: Path, root: Path, fetchers=None, platforms=None) -> Optional[dict]:
+    """Summarize a manifest file, or return None if it isn't a run manifest
+    (its top level must be a mapping with a `run` key)."""
+    summary = {
+        "name": path.name,
+        "path": str(path),
+        "fetcher_count": 0,
+        "issues": None,          # None = couldn't validate; else int error count
+        "runnable": False,
+        "last_run": None,
+        "last_result": None,
+        "readable": True,
+    }
+    try:
+        raw = yaml.safe_load(path.read_text())
+    except (OSError, yaml.YAMLError):
+        summary["readable"] = False
+        return summary
+    if not isinstance(raw, dict) or "run" not in raw:
+        return None  # a stray / non-manifest YAML file — don't offer it as a manifest
+    run = raw.get("run") or {}
+    summary["fetcher_count"] = len(run.get("fetchers") or [])
+    try:
+        errors = validate(raw, root, fetchers, platforms)
+        summary["issues"] = len(errors)
+        summary["runnable"] = not errors
+    except Exception:
+        pass
+    try:
+        # NOTE: last_run is read from the manifest's output_dir; manifests that
+        # share an output_dir (e.g. the default ./evidence) will report the same
+        # last run, since run metadata doesn't record which manifest produced it.
+        runs = list_runs(run.get("output_dir") or "./evidence")
+        if runs:
+            last = runs[0]
+            total = last["ok"] + last["fail"]
+            summary["last_run"] = last["run_id"]
+            summary["last_result"] = f"{last['ok']}/{total} ok" if total else None
+    except Exception:
+        pass
+    return summary
+
+
+def list_manifests(root) -> List[dict]:
+    """Discover selectable run manifests: <root>/manifests/*.yaml, plus a legacy
+    <root>/manifest.yaml if present (listed first). Each is summarized with its
+    fetcher count, validity (issues), and last-run info for the welcome picker.
+    Non-manifest YAML files (no top-level `run`) are skipped."""
+    root = Path(root)
+    paths: List[Path] = []
+    mdir = root / "manifests"
+    if mdir.is_dir():
+        paths += sorted(mdir.glob("*.yaml"))
+    legacy = root / "manifest.yaml"
+    if legacy.exists() and legacy.resolve() not in {p.resolve() for p in paths}:
+        paths.insert(0, legacy)
+    if not paths:
+        return []
+    # Discover the fetcher tree once and reuse it across every manifest's
+    # validate() — otherwise the welcome screen re-scans all fetchers per file.
+    try:
+        fetchers = discover_fetchers(root)
+        platforms = discover_platforms(root)
+    except Exception:
+        fetchers = platforms = None
+    summaries = [_manifest_summary(p, root, fetchers, platforms) for p in paths]
+    return [s for s in summaries if s is not None]
+
+
+def new_manifest_path(root, name: str, output_dir: str = "./evidence") -> Path:
+    """Create a fresh manifest file at <root>/manifests/<name>.yaml and return
+    its path. Raises FileExistsError if it already exists, ValueError on a bad
+    name."""
+    safe = name.strip()
+    if not safe or "/" in safe or safe.startswith("."):
+        raise ValueError(f"invalid manifest name: {name!r}")
+    if not safe.endswith(".yaml"):
+        safe += ".yaml"
+    mdir = Path(root) / "manifests"
+    mdir.mkdir(parents=True, exist_ok=True)
+    path = mdir / safe
+    if path.exists():
+        raise FileExistsError(str(path))
+    path.write_text(yaml.safe_dump(init_manifest(output_dir), sort_keys=False))
+    return path

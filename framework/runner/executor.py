@@ -173,9 +173,10 @@ def _invoke(
     """Run one fetcher invocation.
 
     When on_line is provided, each stdout line is forwarded as it arrives (live
-    streaming for the web UI). When None, behavior matches the previous
-    blocking run — full stdout/stderr are still captured into the result either
-    way. The wall-clock timeout fires even if the fetcher emits no output.
+    streaming for front-ends such as the TUI run console). When None, behavior
+    matches the previous blocking run — full stdout/stderr are still captured
+    into the result either way. The wall-clock timeout fires even if the fetcher
+    emits no output.
     """
     if fetcher.runtime_type == "python":
         cmd = [sys.executable, str(fetcher.entry_path)]

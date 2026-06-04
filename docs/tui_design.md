@@ -14,15 +14,14 @@ Bagels' whole design rests on one rule: **the UI talks only to its
 `managers/*` layer, never to the database.** paramify-fetchers already enforces
 the identical rule with `framework/api.py` — per `CLAUDE.md`, the front-ends
 *call ONLY `framework.api` so behavior is identical.* One unified `paramify`
-CLI steers every front-end: the human CLI (`paramify`), the AI `--json` CLI,
-and the FastAPI web UI (`paramify web`) all sit on that one facade.
+CLI steers every front-end: the human CLI (`paramify`) and the AI `--json` CLI
+both sit on that one facade.
 
 **The TUI (`paramify tui`) is simply another front-end over the same facade.**
 No domain logic, no persistence, and no subprocess handling needs to be
-re-implemented — the TUI is pure presentation. The web UI already proved the facade is GUI-sufficient: it
-pipes `api.run()`'s `on_event` dicts through a thread+queue into a Server-Sent-
-Events stream (`framework/web/server.py`). A Textual worker collapses that
-bridge to a single `@work(thread=True)` call plus a message pump.
+re-implemented — the TUI is pure presentation. The facade is GUI-sufficient:
+`api.run()` emits `on_event` dicts as the run progresses, and a Textual worker
+consumes them with a single `@work(thread=True)` call plus a message pump.
 
 The enabling facts, all verified against `framework/api.py`:
 
@@ -194,7 +193,7 @@ filesystem, or `fetcher.yaml` directly — it calls `framework.api`.
 - **Validate:** after each edit (debounced), `api.validate()`; gate Run on `[]`.
 - **Persist:** `api.dump_manifest()`; catch `ValueError` (schema-invalid).
 
-The run event protocol → Textual worker (the SSE analog):
+The run event protocol → Textual worker:
 
 ```python
 class RunEvent(Message):
@@ -213,14 +212,13 @@ def on_run_event(self, message: RunEvent) -> None:   # back on the UI thread
         case "run_complete": ...
 ```
 
-`post_message` is thread-safe; Textual marshals back onto the UI thread, so the
-web layer's manual queue + `_end` sentinel are unnecessary.
+`post_message` is thread-safe; Textual marshals back onto the UI thread, so a
+front-end doesn't need a manual queue + `_end` sentinel to bridge the events.
 
 ## 5. File layout
 
-Mirrors `framework/web/`'s package shape and honors the "front-ends call ONLY
-`framework.api`" rule — nothing under `tui/` imports `runner.executor`,
-`manifest_loader`, or reads `fetcher.yaml` directly.
+Honors the "front-ends call ONLY `framework.api`" rule — nothing under `tui/`
+imports `runner.executor`, `manifest_loader`, or reads `fetcher.yaml` directly.
 
 ```
 framework/tui/
@@ -242,9 +240,9 @@ framework/tui/
     └── index.tcss
 ```
 
-`framework/tui/__main__.py` deliberately parallels `framework/web/__main__.py`:
-`paramify tui` launches the app, mirroring `paramify web`. (`python -m
-framework.tui|web|runner` still work and equal the matching `paramify`
+`framework/tui/__main__.py` exposes a `launch()` that both `paramify tui` and
+`python -m framework.tui` call, so the two paths stay in lock-step. (`python -m
+framework.tui|runner` still work and equal the matching `paramify`
 subcommands.)
 
 ## 6. Dependencies & license
@@ -335,5 +333,5 @@ optional Phase 4 evidence additions).
    disable-while-running guards; no stop button (no cancel hook in `api`).
 4. **Evidence browser** *(done)* — runs picker + per-run output files + a detail
    modal (enveloped metadata/evidence_set/payload, or raw for legacy files), a
-   run-history view the web UI lacks. Added `api.list_runs` / `api.read_evidence`
+   run-history view. Added `api.list_runs` / `api.read_evidence`
    to stay on the facade. *Polish still to do:* Jump Mode, command palette, themes.

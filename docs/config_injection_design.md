@@ -126,9 +126,9 @@ cloud secret provider, or ambient cloud identity).
 - Fetchers keep reading their env vars exactly as they do now; only the runner's
   env-population path changes. No fetcher code changes required.
 - The merge + injection lives in `executor._build_env` and runs identically
-  whether invoked via the human CLI (`paramify run`), the AI
-  CLI (same with `--json`), or the web UI (`paramify web`) — every
-  front-end calls only `framework.api`, so config injection behaves the same.
+  whether invoked via the human CLI (`paramify run`), the AI CLI (same with
+  `--json`), or the TUI (`paramify tui`) — every front-end calls only
+  `framework.api`, so config injection behaves the same.
 - The `manifest set-platform-config <category> key=value` and
   `set-passthrough <category> ENV_VAR ...` subcommands of the manifest builder
   edit the `platforms:` block described above.

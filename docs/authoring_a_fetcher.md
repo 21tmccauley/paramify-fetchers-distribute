@@ -135,7 +135,7 @@ See [`fetchers/gitlab/ci_cd_pipeline_config/fetcher.yaml`](../fetchers/gitlab/ci
 
 ### Validate
 
-The CLI's discovery and validation all go through the `framework.api` facade — the same code the `--json` (AI) front-end and the web UI (`paramify web`) call, so behavior is identical everywhere.
+The CLI's discovery and validation all go through the `framework.api` facade — the same code the `--json` (AI) front-end and the TUI (`paramify tui`) call, so behavior is identical everywhere.
 
 ```bash
 paramify list             # discovered fetchers, flat; fails if any yaml is schema-invalid

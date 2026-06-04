@@ -211,11 +211,11 @@ Each invocation is killed if it exceeds its timeout (default 600s; override per 
 
 There is one `paramify` CLI (installed via `pip install -e .`), a thin command
 surface over `framework.api`, the shared facade. It steers every front-end:
-the human CLI, the AI CLI (same commands with `--json`), and the web/TUI
-front-ends as the `paramify web` and `paramify tui` subcommands — all through
-that one facade, so behavior is identical across front-ends. Nothing in the CLI
-re-implements discovery, validation, manifest editing, or execution.
-(`python -m framework.runner|tui|web` still work and equal the matching
+the human CLI, the AI CLI (same commands with `--json`), and the TUI as the
+`paramify tui` subcommand — all through that one facade, so behavior is
+identical across front-ends. Nothing in the CLI re-implements discovery,
+validation, manifest editing, or execution.
+(`python -m framework.runner|tui` still work and equal the matching
 `paramify` subcommands.)
 
 ### Discover

@@ -39,18 +39,16 @@ identically. Install it once from the repo (editable), then:
 
 ```bash
 pip install -e .                  # installs the `paramify` command
-                                  # (use `pip install -e '.[all]'` to add the web UI + TUI)
+                                  # (use `pip install -e '.[all]'` to add the TUI)
 
 paramify <cmd>                    # human CLI
 paramify <cmd> --json             # same commands, machine-readable (for AI/scripts)
 paramify tui                      # interactive terminal UI
-paramify web                      # web UI (FastAPI single-page app, runs streamed
-                                  # over Server-Sent Events; default 127.0.0.1:8765)
 ```
 
-> Back-compat: `python -m framework.runner <cmd>`, `python -m framework.tui`, and
-> `python -m framework.web` still work and are exactly equivalent to the
-> corresponding `paramify` subcommands.
+> Back-compat: `python -m framework.runner <cmd>` and `python -m framework.tui`
+> still work and are exactly equivalent to the corresponding `paramify`
+> subcommands.
 
 The CLI command surface:
 
@@ -167,7 +165,6 @@ framework/                      # shared code (facade, runner, contract, schemas
   cli.py                        # the `paramify` CLI — one command, steers every front-end
   runner/                       # executor + manifest loader (+ `python -m framework.runner` shim)
   tui/                          # terminal UI front-end (Textual)
-  web/                          # web UI front-end (FastAPI + SSE)
 fetchers/
   _categories/<name>.yaml       # platform-wide config + auth for a category
   _template/                    # copy this to start a new fetcher

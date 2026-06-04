@@ -140,9 +140,9 @@ Your fetcher should appear in `list` with the right runtime and `[fanout]` or
 secrets, and target fields. If either errors, fix the yaml before continuing.
 Add `--json` to any command for the AI/machine-readable form. One `paramify`
 CLI steers every front-end — the same commands with `--json`, plus
-`paramify tui` and `paramify web` as subcommands — and they all call the same
-`framework.api` facade, so what `describe` reports is exactly what a run sees.
-(`python -m framework.runner|tui|web` still work and equal the matching
+`paramify tui` as a subcommand — and they all call the same `framework.api`
+facade, so what `describe` reports is exactly what a run sees.
+(`python -m framework.runner|tui` still work and equal the matching
 `paramify` subcommands.)
 
 ### 5. Write the entry script

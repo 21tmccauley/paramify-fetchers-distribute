@@ -174,9 +174,9 @@ All operations against the framework — discover fetchers, build/edit a manifes
 
 1. **Human CLI** — `paramify <cmd>`
 2. **AI CLI** — the same commands with `--json` for machine-readable output
-3. **Web UI** — `paramify web`, a FastAPI single-page app (default `127.0.0.1:8765`) that streams runs as Server-Sent Events; the terminal UI is `paramify tui`
+3. **Terminal UI** — `paramify tui`, an interactive Textual app
 
-Keeping the surface in one facade means a new capability lands once and shows up in all three front-ends, and there's no risk of the CLI and UI drifting. (`python -m framework.runner|tui|web` still work and equal the matching `paramify` subcommands.)
+Keeping the surface in one facade means a new capability lands once and shows up in all three front-ends, and there's no risk of the CLI and UI drifting. (`python -m framework.runner|tui` still work and equal the matching `paramify` subcommands.)
 
 ### CLI command surface
 
@@ -193,7 +193,7 @@ manifest <sub>               build/edit a manifest file (-f/--file, default ./ma
 
 ### Execution and the run directory
 
-The executor runs each invocation via `subprocess.Popen` + threads with live stdout streaming (which feeds the web UI's SSE channel) and a per-invocation timeout (default 600s, overridable via `runtime.timeout` in `fetcher.yaml`; a timed-out invocation is killed and reported as exit 124). Each child gets a minimal env whitelist plus the injected config, resolved secrets, and category passthrough vars.
+The executor runs each invocation via `subprocess.Popen` + threads with live stdout streaming (which feeds the TUI run console) and a per-invocation timeout (default 600s, overridable via `runtime.timeout` in `fetcher.yaml`; a timed-out invocation is killed and reported as exit 124). Each child gets a minimal env whitelist plus the injected config, resolved secrets, and category passthrough vars.
 
 Output lands in `<output_dir>/run-<UTC-timestamp>/`: each evidence file is wrapped in the `{schema_version, metadata, payload}` envelope, and a `_run_metadata.json` (the per-run index, **not** enveloped) records run_id, per-invocation timestamps, durations, exit codes, and outputs.
 
@@ -299,7 +299,6 @@ paramify-fetchers/
 │   ├── contract.py                   # dataclasses (Fetcher, Manifest, RunResult, ...)
 │   ├── config_loader.py              # discover fetchers; validate against schema
 │   ├── secret_resolver.py            # ${env:VAR_NAME} resolution
-│   ├── web.py                        # `paramify web` — FastAPI single-page UI (SSE)
 │   ├── runner/
 │   │   ├── __init__.py               # CLI front-end (list/catalog/describe/validate/run/manifest)
 │   │   ├── __main__.py               # entry point for `python -m framework.runner`
@@ -341,7 +340,7 @@ paramify-fetchers/
 ├── manifest.yaml                     # repo-root sample manifest
 ├── run_and_upload.sh                 # repo-root collect→upload example glue
 │
-├── requirements.txt                  # python-dotenv, requests, pyyaml, fastapi/uvicorn
+├── requirements.txt                  # python-dotenv, requests, pyyaml, typer, textual
 │
 └── docs/
     ├── design.md                     # this file — design rationale
@@ -405,7 +404,7 @@ progress lives in [`handoff.md`](handoff.md).** Snapshot: 56 fetchers across
 7 categories (okta, aws, sentinelone, knowbe4, gitlab, k8s, rippling); the
 AWS port is complete (30/30). The pieces that make this run:
 
-- **Facade + three front-ends** (`framework/api.py`) — all discovery, manifest editing, validate, and run go through one facade; the human CLI, the `--json` AI CLI, and the FastAPI web UI (`paramify web`, SSE-streamed) all call only the facade
+- **Facade + three front-ends** (`framework/api.py`) — all discovery, manifest editing, validate, and run go through one facade; the human CLI, the `--json` AI CLI, and the Textual TUI (`paramify tui`) all call only the facade
 - **Fetcher schema** (`framework/schemas/fetcher_schema.json`) — supports fanout: `supports_targets`, `target_schema`, `per_target` secrets, `output.aggregation`. Extended additively from the original minimal version.
 - **Runner** (`framework/runner/`) — `list` / `catalog` / `describe` / `validate` / `run` / `manifest` subcommands (all with `--json`); single-target + fanout execution via `subprocess.Popen` + streamed stdout, per-invocation timeout (default 600s, exit 124 on kill), per-target failure isolation, env-whitelist + config/secret/passthrough injection, secret resolution from `${env:...}` references, envelope wrapping, `_run_metadata.json` recording (run_id, per-invocation timestamps, durations, exit codes, outputs)
 - **Manifest schema** (`framework/schemas/run_manifest_schema.json`) + builder CLI (`manifest` subcommands) + working examples (`examples/minimal_run.yaml`, `multi_region_aws.yaml`, `full_compliance_run.yaml`, ...)

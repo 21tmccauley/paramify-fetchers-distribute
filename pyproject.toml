@@ -11,8 +11,7 @@ requires-python = ">=3.10"
 license = { text = "Proprietary" }
 
 # Base runtime: everything the headless `paramify` CLI and the runner need.
-# The web UI and the TUI are optional front-ends — install their extras to use
-# `paramify web` / `paramify tui`.
+# The TUI is an optional front-end — install its extra to use `paramify tui`.
 dependencies = [
     "python-dotenv",
     "requests",
@@ -22,29 +21,27 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-web = ["fastapi", "uvicorn"]
 tui = ["textual>=1.0,<2.0"]
 checkov = ["checkov"]
 dev = ["pytest"]
 # Convenience: every front-end + dev tooling in one install.
-all = ["fastapi", "uvicorn", "textual>=1.0,<2.0", "checkov", "pytest"]
+all = ["textual>=1.0,<2.0", "checkov", "pytest"]
 
 # The single entry point. `paramify` steers every front-end: the headless
-# commands, plus `paramify tui` and `paramify web`. (Renaming later is a one-line
-# change here; add a second line to register an alias.)
+# commands, plus `paramify tui`. (Renaming later is a one-line change here; add
+# a second line to register an alias.)
 [project.scripts]
 paramify = "framework.cli:app"
 
 # Supported install is editable/source: `pip install -e .` in the clone. Only
 # the importable `framework` package's .py modules are shipped here. The data
-# files (framework/schemas/*.json, framework/tui/styles/*.tcss,
-# framework/web/static/*) are NOT packaged: schemas resolve via the
-# cwd-discovered repo root, while the TUI stylesheet and web static dir are read
-# relative to their own module files — both present in an editable/source tree.
-# A pure built wheel therefore can't serve the TUI/web (missing data files) or
-# run fetchers (they execute as subprocesses out of fetchers/, never shipped).
-# If a non-editable wheel is ever needed, add [tool.setuptools.package-data] for
-# those dirs and defer framework.web.server's create_app() out of import time.
+# files (framework/schemas/*.json, framework/tui/styles/*.tcss) are NOT
+# packaged: schemas resolve via the cwd-discovered repo root, while the TUI
+# stylesheet is read relative to its own module file — both present in an
+# editable/source tree. A pure built wheel therefore can't serve the TUI
+# (missing data files) or run fetchers (they execute as subprocesses out of
+# fetchers/, never shipped). If a non-editable wheel is ever needed, add
+# [tool.setuptools.package-data] for those dirs.
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["framework*"]

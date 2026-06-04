@@ -5,12 +5,8 @@ pyyaml
 jsonschema
 
 # Unified CLI (`paramify` / framework.cli) — the single command surface that
-# steers every front-end (headless commands + `paramify tui` / `paramify web`).
+# steers every front-end (headless commands + `paramify tui`).
 typer
-
-# Web UI (framework/web) — optional unless you run the server
-fastapi
-uvicorn
 
 # Terminal UI (framework/tui) — optional unless you run the console
 textual>=1.0,<2.0

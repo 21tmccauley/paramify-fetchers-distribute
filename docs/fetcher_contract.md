@@ -94,7 +94,7 @@ Worked example: [`fetchers/gitlab/ci_cd_pipeline_config/fetcher.yaml`](../fetche
 
 ## Schema-level enforcement
 
-Discovery, validation, and runs all go through the `framework.api` facade. One CLI, `paramify`, sits on top of it and steers every front-end — the human CLI (`paramify <cmd>`), the same commands with `--json` for AI callers, the terminal UI (`paramify tui`), and the web UI (`paramify web`, a FastAPI single-page app streaming runs over Server-Sent Events) — so behavior is identical across them. (`python -m framework.runner`, `python -m framework.tui`, and `python -m framework.web` still work and are exactly equivalent to the matching `paramify` subcommands.)
+Discovery, validation, and runs all go through the `framework.api` facade. One CLI, `paramify`, sits on top of it and steers every front-end — the human CLI (`paramify <cmd>`), the same commands with `--json` for AI callers, and the terminal UI (`paramify tui`) — so behavior is identical across them. (`python -m framework.runner` and `python -m framework.tui` still work and are exactly equivalent to the matching `paramify` subcommands.)
 
 The CLI command surface (`paramify <cmd>`, each accepting `--json`):
 

@@ -1,9 +1,9 @@
 """Facade for the fetcher framework — one source of truth for every front-end.
 
-The unified `paramify` CLI (driven by humans and AIs), the `paramify tui`, and
-the `paramify web` UI call ONLY this module. They never re-implement discovery,
-validation, manifest editing, or execution; they differ only in how they render
-the JSON-able values these functions return.
+The unified `paramify` CLI (driven by humans and AIs) and the `paramify tui`
+call ONLY this module. They never re-implement discovery, validation, manifest
+editing, or execution; they differ only in how they render the JSON-able values
+these functions return.
 
 Design constraints (see docs/config_injection_design.md, CLAUDE.md):
 - The editable artifact is the manifest (customer-side values). Declarations

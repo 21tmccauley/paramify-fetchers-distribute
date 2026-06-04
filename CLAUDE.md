@@ -61,10 +61,9 @@ validate, and run all go through it. One CLI, `paramify` (`framework/cli.py`, a
 Typer app installed via `pip install -e .`), steers every front-end and is a
 strict superset of what each can do; they call ONLY `framework.api` so behavior
 is identical: the human CLI (`paramify`), the AI CLI (same commands with
-`--json`), the terminal UI (`paramify tui`), and the web UI (`paramify web` —
-FastAPI single-page app, runs streamed as Server-Sent Events, default
-`127.0.0.1:8765`). Back-compat: `python -m framework.runner|tui|web` still work
-and are equivalent to the matching `paramify` subcommands.
+`--json`), and the terminal UI (`paramify tui`). Back-compat:
+`python -m framework.runner|tui` still work and are equivalent to the matching
+`paramify` subcommands.
 
 CLI surface (`paramify <cmd>`, all accept `--json`):
 - `list` — discovered fetchers (flat)

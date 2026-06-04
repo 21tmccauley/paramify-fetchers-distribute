@@ -48,7 +48,7 @@ def _registered():
 
 EXPECTED_TOP = {
     "list", "catalog", "describe", "manifests", "runs", "evidence",
-    "validate", "run", "manifest", "tui", "web",
+    "validate", "run", "manifest", "tui",
 }
 EXPECTED_MANIFEST = {
     "init", "new", "add", "remove", "set-config", "set-secret",

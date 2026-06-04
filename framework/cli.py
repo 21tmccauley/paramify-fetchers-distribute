@@ -2,10 +2,10 @@
 
 A single Typer command surface over ``framework.api`` (the shared facade). Every
 command — human or AI — goes through the facade; nothing here re-implements
-discovery, validation, manifest editing, or execution. The TUI and web UI are
-launched as subcommands (``paramify tui`` / ``paramify web``) so one CLI steers
-every front-end, and the headless CLI is a strict superset of what the TUI can
-do (see ``tests/test_cli.py``, which enforces that invariant).
+discovery, validation, manifest editing, or execution. The TUI is launched as a
+subcommand (``paramify tui``) so one CLI steers every front-end, and the
+headless CLI is a strict superset of what the TUI can do (see
+``tests/test_cli.py``, which enforces that invariant).
 
 Read / discover:
   paramify list [--json]                       # discovered fetchers (flat)
@@ -34,7 +34,6 @@ Validate / run / launch:
   paramify validate <manifest> [--json]
   paramify run <manifest> [--json]
   paramify tui [--manifest PATH] [--at ROOT]   # interactive terminal UI
-  paramify web [--host H] [--port P] [--reload]
 
 Secrets are referenced as ${env:VAR} — set-secret / add-target take the ENV VAR
 NAME, never the secret value. The runner resolves refs from its own environment.
@@ -653,21 +652,6 @@ def tui_cmd(
         _err(f"The TUI requires the 'tui' extra (textual). Install it:  pip install 'paramify[tui]'\n  ({e})")
         raise typer.Exit(1)
     launch(manifest, at)
-
-
-@app.command("web")
-def web_cmd(
-    host: str = typer.Option("127.0.0.1", "--host", help="Bind host"),
-    port: int = typer.Option(8765, "--port", help="Bind port"),
-    reload: bool = typer.Option(False, "--reload", help="Auto-reload on code changes"),
-):
-    """Launch the web UI (FastAPI single-page app)."""
-    try:
-        from framework.web.__main__ import launch
-    except ImportError as e:
-        _err(f"The web UI requires the 'web' extra (fastapi, uvicorn). Install it:  pip install 'paramify[web]'\n  ({e})")
-        raise typer.Exit(1)
-    launch(host, port, reload)
 
 
 if __name__ == "__main__":

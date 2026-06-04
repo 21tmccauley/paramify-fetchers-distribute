@@ -14,8 +14,8 @@ For project overview see [`design.md`](design.md). For porting procedure see [`p
 - **`framework/api.py` is THE FACADE.** All discovery (catalog/describe), manifest editing, validate, and run go through it. One `paramify` CLI steers every front-end — all call *only* `framework.api`, so behavior is identical across all three:
   - **human CLI:** `paramify`
   - **AI CLI:** the same commands with `--json`
-  - **web UI:** `paramify web` (FastAPI single-page app; runs stream as Server-Sent Events; default `127.0.0.1:8765`), plus `paramify tui` for the terminal UI
-  - (`python -m framework.runner|tui|web` still work and equal the matching `paramify` subcommands.)
+  - **terminal UI:** `paramify tui`
+  - (`python -m framework.runner|tui` still work and equal the matching `paramify` subcommands.)
 - CLI command surface (`paramify <cmd>`):
   - `list [--json]` — discovered fetchers (flat)
   - `catalog [--json]` — categories → fetchers → editable fields
@@ -25,7 +25,7 @@ For project overview see [`design.md`](design.md). For porting procedure see [`p
   - `manifest <sub>` — create/edit a manifest file (`-f`/`--file`, default `./manifest.yaml`): `init [--output-dir DIR]` | `add <fetcher>` | `remove <fetcher>` | `set-config <fetcher> key=value` | `set-secret <fetcher> <secret_name> <ENV_VAR>` | `add-target <fetcher> k=v ... [--secret name=ENV_VAR ...]` | `set-platform-config <category> key=value` | `set-passthrough <category> ENV_VAR ...` | `set-output-dir <dir>` | `show [--json]`. The builder reads each `fetcher.yaml` and warns which secrets/config are still missing until the fetcher is runnable.
 - Schemas: `fetcher_schema.json` (supports fanout: `supports_targets`, `target_schema`, `per_target`, `output.aggregation`) + `run_manifest_schema.json`
 - `contract.py`, `config_loader.py`, `secret_resolver.py` (handles `${env:VAR_NAME}` references)
-- Executor: `subprocess.Popen` + threads with live stdout streaming (feeds the web SSE), per-invocation timeout, minimal env whitelist plus injected config/secrets/passthrough.
+- Executor: `subprocess.Popen` + threads with live stdout streaming (feeds the TUI run console), per-invocation timeout, minimal env whitelist plus injected config/secrets/passthrough.
 - Per-target fanout works end-to-end. `depends_on` declared in schema but not yet honored by runner (`framework/runner/dependency_graph.py`, `logger.py`, `retry.py` are still empty stubs).
 - **Config injection (landed 2026-05-28)** — runner injects non-secret config as env vars from `config_schema` (per-fetcher, in `fetcher.yaml`) and platform-wide config + auth from `fetchers/_categories/<category>.yaml`, merged with a manifest `platforms:` block. Also `auth.passthrough_env` lets ambient cloud-identity vars (e.g. IRSA) through the env whitelist. See `docs/config_injection_design.md`; example `examples/with_platform_config.yaml`. Fixed the previously-dead `EXCLUDE_AWS_MANAGED_ROLES` toggle and Rippling `RIPPLING_BASE_URL`/`RIPPLING_PAGE_SIZE`. New `category_schema.json` validates the `_categories/*.yaml` files.
 - **Per-invocation timeout (landed 2026-05-28)** — runner kills any fetcher exceeding its timeout (default 600s; override via `runtime.timeout` in `fetcher.yaml`) and records `exit_code: 124` instead of hanging the whole run.
@@ -268,8 +268,8 @@ paramify manifest show
 paramify validate examples/minimal_run.yaml
 paramify run examples/minimal_run.yaml
 
-# Web UI (FastAPI single-page app; runs stream as SSE; default 127.0.0.1:8765):
-paramify web
+# Terminal UI (interactive Textual app):
+paramify tui
 
 # Upload an enveloped run dir to Paramify (separate stage):
 .venv/bin/python uploaders/paramify_evidence/uploader.py --dry-run <output_dir>/run-<UTC-timestamp>
@@ -360,7 +360,7 @@ What's left is new categories and the framework pieces that gate them (see
 - **Checkov** (2 bash) and **Azure** (no source ported) are not framework-blocked, just unstarted.
 
 Pick a framework piece, then the script. All work routes through `framework.api`
-(the human CLI, the `--json` AI CLI, and the `paramify web` UI all
+(the human CLI, the `--json` AI CLI, and the `paramify tui` all
 share it — change behavior there, not in a front-end). For a fresh fetcher/port,
 follow [`docs/ai_port_recipe.md`](ai_port_recipe.md) and verify with
 `paramify list`, `bash -n`, and a fake-cred smoke (expect exit 1).
@@ -372,7 +372,7 @@ The 3 fetchers without `evidence_set.instructions` (`aws_rds_tls_configuration`,
 ## State summary (TL;DR)
 
 - **56 fetchers across 7 categories** (aws 30, okta 8, sentinelone 5, knowbe4 4, gitlab 3, k8s 3, rippling 3). All 30 AWS are fanout (22 regional, 5 global profile-only, 3 mixed-scope).
-- **`framework/api.py` is the single facade** behind 3 front-ends, all steered by one `paramify` CLI: human CLI (`paramify`), AI CLI (same + `--json`), and web UI (`paramify web`, FastAPI/SSE; `paramify tui` for the terminal UI). A manifest-builder CLI (`manifest <sub>`) reads each `fetcher.yaml` and reports what's still missing.
+- **`framework/api.py` is the single facade** behind 3 front-ends, all steered by one `paramify` CLI: human CLI (`paramify`), AI CLI (same + `--json`), and terminal UI (`paramify tui`). A manifest-builder CLI (`manifest <sub>`) reads each `fetcher.yaml` and reports what's still missing.
 - **Built:** config injection + `auth.passthrough_env`, envelope wrapping (`{schema_version, metadata, payload}`), `evidence_set` identity backfilled onto all 56, the `paramify_evidence` uploader, per-invocation timeout (124 on kill), `stderr_tail` on failure, AWS region/profile fanout. Collect→upload glue example: `run_and_upload.sh`.
 - **Not built:** `paramify_issues` uploader (empty stub → blocks Wiz); comparators / `depends_on` / retry / logger (empty stubs); `aggregate` fanout mode (declared, unused). `azure`/`checkov`/`ssllabs`/`wiz` are category-yaml stubs with **no ported fetchers**.
 - Exit codes still binary 0/1 (plus 124 = runner timeout-kill).

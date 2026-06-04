@@ -1,6 +1,6 @@
 """Terminal UI for the fetcher framework.
 
-A Textual front-end over framework.api — the SAME facade the CLI and web UI use.
+A Textual front-end over framework.api — the SAME facade the CLI uses.
 It never re-implements discovery, validation, manifest editing, or execution; it
 only renders the JSON-able values the facade returns. Launch via:
 

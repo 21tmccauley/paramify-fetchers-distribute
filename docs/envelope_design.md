@@ -2,7 +2,7 @@
 
 **Status:** Implemented (v0.x, 2026-05-28). `framework/envelope.py` +
 `framework/schemas/envelope_schema.json`; wrapped from `framework/api.py`'s
-`run` path (the facade behind the CLI, `--json` AI CLI, and web UI).
+`run` path (the facade behind the CLI, `--json` AI CLI, and TUI).
 **Date:** 2026-05-28
 **Solves:** evidence files are not self-describing and have no common shape, which
 blocks the uploader (and the Wiz fetcher). See [`design.md`](design.md) §"The

@@ -1,8 +1,7 @@
 """Launch the TUI: python -m framework.tui [--manifest PATH] [--at ROOT]
 
 Both this module entry point and the unified CLI's `paramify tui` subcommand
-call launch(), so the two paths stay in lock-step. Deliberately parallels
-framework/web/__main__.py so the front-ends share a shape.
+call launch(), so the two paths stay in lock-step.
 """
 
 import argparse

@@ -135,12 +135,12 @@ See [`fetchers/gitlab/ci_cd_pipeline_config/fetcher.yaml`](../fetchers/gitlab/ci
 
 ### Validate
 
-The CLI's discovery and validation all go through the `framework.api` facade — the same code the `--json` (AI) front-end and the web UI (`python -m framework.web`) call, so behavior is identical everywhere.
+The CLI's discovery and validation all go through the `framework.api` facade — the same code the `--json` (AI) front-end and the web UI (`paramify web`) call, so behavior is identical everywhere.
 
 ```bash
-python -m framework.runner list             # discovered fetchers, flat; fails if any yaml is schema-invalid
-python -m framework.runner catalog          # categories -> fetchers -> editable fields
-python -m framework.runner describe <category>_<short_name>   # your fetcher's config/secrets/target fields
+paramify list             # discovered fetchers, flat; fails if any yaml is schema-invalid
+paramify catalog          # categories -> fetchers -> editable fields
+paramify describe <category>_<short_name>   # your fetcher's config/secrets/target fields
 ```
 
 Run `describe` on your new fetcher to confirm the runner parsed its config, secrets, and target fields the way you intended. Add `--json` to any of these for machine-readable output.
@@ -220,8 +220,8 @@ In v0.x, validation is end-to-end against a real or fake tenant:
    Confirm: exit code is 0, output JSON lands in `EVIDENCE_DIR`, contents look right.
 3. **Then run through the runner:** add an entry to a manifest, then:
    ```bash
-   python -m framework.runner validate path/to/manifest.yaml
-   python -m framework.runner run      path/to/manifest.yaml
+   paramify validate path/to/manifest.yaml
+   paramify run      path/to/manifest.yaml
    ```
 
 You can also smoke-test the wiring with fake creds — set env vars to deliberately-invalid values and confirm the fetcher fails *at the network layer* (DNS / connection error) rather than at "missing env var." That proves the env-passing path is intact.

@@ -1,0 +1,674 @@
+"""Paramify fetcher framework — the unified CLI (`paramify`).
+
+A single Typer command surface over ``framework.api`` (the shared facade). Every
+command — human or AI — goes through the facade; nothing here re-implements
+discovery, validation, manifest editing, or execution. The TUI and web UI are
+launched as subcommands (``paramify tui`` / ``paramify web``) so one CLI steers
+every front-end, and the headless CLI is a strict superset of what the TUI can
+do (see ``tests/test_cli.py``, which enforces that invariant).
+
+Read / discover:
+  paramify list [--json]                       # discovered fetchers (flat)
+  paramify catalog [--json]                    # categories -> fetchers -> fields
+  paramify describe <fetcher> [--json]
+  paramify manifests [--json]                  # discovered run manifests
+  paramify runs [--output-dir DIR] [--json]    # past runs under an output dir
+  paramify evidence <path> [--json]            # read one evidence file
+
+Manifest editing (writes the manifest file; -f/--file, default ./manifest.yaml;
+every subcommand accepts --json, emitting {"ok", "path", "errors"}):
+  paramify manifest init [--output-dir DIR]
+  paramify manifest new <name> [--output-dir DIR]      # creates manifests/<name>.yaml
+  paramify manifest add <fetcher>
+  paramify manifest remove <fetcher>
+  paramify manifest set-config <fetcher> key=value
+  paramify manifest set-secret <fetcher> <secret_name> <ENV_VAR>
+  paramify manifest add-target <fetcher> k=v ... [--secret name=ENV_VAR ...]
+  paramify manifest remove-target <fetcher> <index>
+  paramify manifest set-platform-config <category> key=value
+  paramify manifest set-passthrough <category> ENV_VAR ...
+  paramify manifest set-output-dir <dir>
+  paramify manifest show [--json]
+
+Validate / run / launch:
+  paramify validate <manifest> [--json]
+  paramify run <manifest> [--json]
+  paramify tui [--manifest PATH] [--at ROOT]   # interactive terminal UI
+  paramify web [--host H] [--port P] [--reload]
+
+Secrets are referenced as ${env:VAR} — set-secret / add-target take the ENV VAR
+NAME, never the secret value. The runner resolves refs from its own environment.
+Outputs land in <output_dir>/run-<timestamp>/ with a _run_metadata.json.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import List, Optional
+
+import typer
+
+from framework import api
+
+_DEFAULT_MANIFEST = "manifest.yaml"
+
+# context_settings registers `-h` as an alias for `--help` at every level
+# (top-level, each command, the manifest group, and its subcommands), matching
+# the old argparse CLI — argparse gave `-h` for free; Typer/Click does not.
+_HELP_OPTS = {"help_option_names": ["-h", "--help"]}
+
+app = typer.Typer(
+    no_args_is_help=True,
+    add_completion=False,
+    context_settings=_HELP_OPTS,
+    help="Paramify fetcher framework — discover, build, run, and inspect evidence fetchers.",
+)
+manifest_app = typer.Typer(
+    no_args_is_help=True,
+    context_settings=_HELP_OPTS,
+    help="Create/edit a manifest file (-f/--file, default ./manifest.yaml).",
+)
+app.add_typer(manifest_app, name="manifest")
+
+
+# --------------------------------------------------------------------------- #
+# Small shared helpers (ported verbatim from the previous argparse CLI)
+# --------------------------------------------------------------------------- #
+
+def _err(msg: str) -> None:
+    typer.echo(msg, err=True)
+
+
+def _coerce(raw: str, typ: str):
+    """Coerce a CLI string value to a config/target field's declared type."""
+    if typ == "boolean":
+        return str(raw).strip().lower() in ("true", "1", "yes", "on")
+    if typ == "integer":
+        return int(raw)
+    return raw
+
+
+def _fail(path, msg: str, json_out: bool):
+    """Report a command-level argument error honoring --json, then exit 1.
+
+    Keeps the {ok, path, errors} contract on mutator argument-error paths (a
+    missing '=' or an un-coercible integer) instead of letting Click emit a
+    usage panel (exit 2) or a raw traceback (exit 1) that leaves a --json
+    consumer with empty stdout.
+    """
+    if json_out:
+        typer.echo(json.dumps({"ok": False, "path": str(path) if path else None, "errors": [msg]}, indent=2))
+    else:
+        _err(msg)
+    raise typer.Exit(1)
+
+
+def _parse_kv(arg: str, path, json_out: bool):
+    if "=" not in arg:
+        _fail(path, f"expected key=value, got: {arg!r}", json_out)
+    return arg.split("=", 1)
+
+
+def _coerce_or_fail(value: str, typ: str, key: str, path, json_out: bool):
+    try:
+        return _coerce(value, typ)
+    except ValueError:
+        _fail(path, f"{key}: expected {typ}, got: {value!r}", json_out)
+
+
+def _find_fetcher(cat: dict, name: str):
+    for c in cat["categories"]:
+        for f in c["fetchers"]:
+            if f["name"] == name:
+                return f
+    return None
+
+
+def _config_type(root: Path, fetcher_name: str, key: str) -> str:
+    """Look up a config field's declared type (fetcher then platform), else string."""
+    cat = api.catalog(root)
+    f = _find_fetcher(cat, fetcher_name)
+    if f:
+        for fld in f["config"]:
+            if fld["name"] == key:
+                return fld["type"]
+        cat_name = f["category"]
+        for c in cat["categories"]:
+            if c["name"] == cat_name and c.get("platform"):
+                for fld in c["platform"]["config"]:
+                    if fld["name"] == key:
+                        return fld["type"]
+    return "string"
+
+
+def _platform_config_type(root: Path, category: str, key: str) -> str:
+    cat = api.catalog(root)
+    for c in cat["categories"]:
+        if c["name"] == category and c.get("platform"):
+            for fld in c["platform"]["config"]:
+                if fld["name"] == key:
+                    return fld["type"]
+    return "string"
+
+
+def _target_field_type(root: Path, fetcher_name: str, key: str) -> str:
+    cat = api.catalog(root)
+    f = _find_fetcher(cat, fetcher_name)
+    if f:
+        for fld in f["target_schema"]:
+            if fld["name"] == key:
+                return fld["type"]
+    return "string"
+
+
+def _human_run_printer():
+    """Return an on_event callback that reproduces the original CLI run output."""
+    def on_event(ev: dict) -> None:
+        kind = ev["event"]
+        if kind == "run_start":
+            typer.echo(f"Run {ev['run_id']} → {ev['run_dir']}\n")
+        elif kind == "fetcher_skip":
+            _err(f"  SKIP  {ev['fetcher']} ({ev['reason']})")
+        elif kind == "fetcher_start":
+            if ev["fanout"]:
+                typer.echo(f"  RUN   {ev['fetcher']}  ({ev['targets']} targets)")
+            else:
+                typer.echo(f"  RUN   {ev['fetcher']}")
+        elif kind == "fetcher_error":
+            _err(f"        runner error: {ev['error']}")
+        elif kind == "fetcher_result":
+            mark = "OK" if ev["exit_code"] == 0 else "FAIL"
+            target = f"  target={ev['target']}" if ev["target"] else ""
+            typer.echo(f"        [{mark}] exit={ev['exit_code']} duration={ev['duration_sec']}s{target}")
+        elif kind == "run_complete":
+            typer.echo(f"\n_run_metadata.json → {ev['metadata_path']}")
+        # log_line is intentionally not printed (matches prior non-streaming CLI)
+    return on_event
+
+
+# --------------------------------------------------------------------------- #
+# Discover / describe
+# --------------------------------------------------------------------------- #
+
+@app.command("list")
+def list_cmd(json_out: bool = typer.Option(False, "--json", help="Emit JSON")):
+    """List discovered fetchers (flat)."""
+    root = api.find_repo_root()
+    cat = api.catalog(root)
+    fetchers = sorted(
+        (f for c in cat["categories"] for f in c["fetchers"]),
+        key=lambda f: f["name"],
+    )
+    if json_out:
+        typer.echo(json.dumps(fetchers, indent=2))
+        return
+    if not fetchers:
+        typer.echo("No fetchers discovered.")
+        return
+    typer.echo(f"Discovered {len(fetchers)} fetchers:\n")
+    for f in fetchers:
+        st = "fanout" if f["supports_targets"] else "single"
+        typer.echo(f"  {f['name']:50s} v{f['version']:8s} [{st:6s}] category={f['category'] or '-'}")
+
+
+@app.command("catalog")
+def catalog_cmd(json_out: bool = typer.Option(False, "--json", help="Emit JSON")):
+    """Show categories -> fetchers -> editable fields."""
+    root = api.find_repo_root()
+    cat = api.catalog(root)
+    if json_out:
+        typer.echo(json.dumps(cat, indent=2))
+        return
+    for c in cat["categories"]:
+        desc = f" — {c['description'].strip()}" if c.get("description") else ""
+        typer.echo(f"\n{c['name']}{desc}")
+        if c.get("platform") and c["platform"]["config"]:
+            keys = ", ".join(f["name"] for f in c["platform"]["config"])
+            typer.echo(f"  platform config: {keys}")
+        for f in c["fetchers"]:
+            tag = "fanout" if f["supports_targets"] else "single"
+            typer.echo(f"    {f['name']:48s} [{tag}]")
+
+
+@app.command("describe")
+def describe_cmd(
+    fetcher: str = typer.Argument(..., help="Fetcher name (globally unique)"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
+):
+    """Describe one fetcher's config / secrets / target fields."""
+    root = api.find_repo_root()
+    cat = api.catalog(root)
+    f = _find_fetcher(cat, fetcher)
+    if f is None:
+        _err(f"Unknown fetcher: {fetcher}")
+        raise typer.Exit(1)
+    if json_out:
+        typer.echo(json.dumps(f, indent=2))
+        return
+    typer.echo(f"{f['name']}  v{f['version']}  (category={f['category'] or '-'})")
+    typer.echo(f"  {f['description']}")
+    typer.echo(f"  supports_targets: {f['supports_targets']}")
+    for label, fields in (("config", f["config"]), ("secrets", f["secrets"]),
+                          ("target_schema", f["target_schema"])):
+        if fields:
+            typer.echo(f"  {label}:")
+            for fld in fields:
+                req = "required" if fld.get("required") else "optional"
+                extra = f" default={fld['default']}" if fld.get("default") is not None else ""
+                typer.echo(f"    - {fld['name']} ({fld['type']}, {req}){extra}")
+
+
+@app.command("manifests")
+def manifests_cmd(json_out: bool = typer.Option(False, "--json", help="Emit JSON")):
+    """List discovered run manifests (manifests/*.yaml + legacy manifest.yaml)."""
+    root = api.find_repo_root()
+    items = api.list_manifests(root)
+    if json_out:
+        typer.echo(json.dumps(items, indent=2))
+        return
+    if not items:
+        typer.echo("No manifests found (looked in ./manifests/*.yaml and ./manifest.yaml).")
+        return
+    typer.echo(f"Discovered {len(items)} manifest(s):\n")
+    for m in items:
+        if not m["readable"]:
+            typer.echo(f"  {m['name']:32s} (unreadable)")
+            continue
+        if m["runnable"]:
+            state = "runnable"
+        elif m["issues"] is not None:
+            state = f"{m['issues']} issue(s)"
+        else:
+            state = "unvalidated"
+        last = f"  last={m['last_result']}" if m.get("last_result") else ""
+        typer.echo(f"  {m['name']:32s} {m['fetcher_count']:2d} fetchers  [{state}]{last}")
+
+
+@app.command("runs")
+def runs_cmd(
+    output_dir: str = typer.Option("./evidence", "-o", "--output-dir", help="Run output dir to scan"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
+):
+    """List past runs under an output dir (newest first)."""
+    runs = api.list_runs(output_dir)
+    if json_out:
+        typer.echo(json.dumps(runs, indent=2, default=str))
+        return
+    if not runs:
+        typer.echo(f"No runs found under {output_dir}.")
+        return
+    typer.echo(f"{len(runs)} run(s) under {output_dir} (newest first):\n")
+    for r in runs:
+        total = r["ok"] + r["fail"]
+        if not r["complete"]:
+            status = "incomplete"
+        elif r["fail"]:
+            status = "has failures"
+        else:
+            status = "ok"
+        when = r.get("started_at") or "?"
+        typer.echo(f"  {r['run_id']:26s} {when}  {r['ok']}/{total} ok  {len(r['files'])} files  [{status}]")
+
+
+@app.command("evidence")
+def evidence_cmd(
+    path: str = typer.Argument(..., help="Path to an evidence JSON file"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
+):
+    """Read & display one evidence file (normalizing the standard envelope)."""
+    try:
+        ev = api.read_evidence(path)
+    except ValueError as e:
+        if json_out:
+            typer.echo(json.dumps({"error": str(e)}, indent=2))
+        else:
+            _err(str(e))
+        raise typer.Exit(1)
+    if json_out:
+        typer.echo(json.dumps(ev, indent=2, default=str))
+        return
+    typer.echo(f"enveloped: {ev['enveloped']}")
+    if ev["schema_version"]:
+        typer.echo(f"schema_version: {ev['schema_version']}")
+    if ev["metadata"]:
+        typer.echo("metadata:")
+        typer.echo("  " + json.dumps(ev["metadata"], indent=2, default=str).replace("\n", "\n  "))
+    typer.echo("payload:")
+    typer.echo(json.dumps(ev["payload"], indent=2, default=str))
+
+
+# --------------------------------------------------------------------------- #
+# Validate / run
+# --------------------------------------------------------------------------- #
+
+@app.command("validate")
+def validate_cmd(
+    manifest: str = typer.Argument(..., help="Path to manifest yaml"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
+):
+    """Validate a manifest against the schema + discovered fetchers."""
+    root = api.find_repo_root()
+    try:
+        m = api.read_manifest(Path(manifest).resolve())
+    except Exception as e:  # noqa: BLE001 — surface any load error to the user
+        if json_out:
+            typer.echo(json.dumps({"ok": False, "errors": [str(e)]}, indent=2))
+        else:
+            _err(f"Validation failed: {e}")
+        raise typer.Exit(1)
+    errors = api.validate(m, root)
+    if json_out:
+        typer.echo(json.dumps({"ok": not errors, "errors": errors}, indent=2))
+        raise typer.Exit(0 if not errors else 1)
+    if errors:
+        for e in errors:
+            _err(f"  ERROR  {e}")
+        raise typer.Exit(1)
+    n = len(m.get("run", {}).get("fetchers", []))
+    typer.echo(f"OK  manifest valid; {n} fetcher entries")
+
+
+@app.command("run")
+def run_cmd(
+    manifest: str = typer.Argument(..., help="Path to manifest yaml"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON summary"),
+):
+    """Run a manifest; streams per-fetcher results (or a JSON summary with --json)."""
+    root = api.find_repo_root()
+    try:
+        m = api.read_manifest(Path(manifest).resolve())
+    except Exception as e:  # noqa: BLE001
+        if json_out:
+            typer.echo(json.dumps({"ok": False, "error": str(e)}, indent=2))
+        else:
+            _err(f"Setup failed: {e}")
+        raise typer.Exit(1)
+    try:
+        summary = api.run(m, root, on_event=None if json_out else _human_run_printer())
+    except (ValueError, RuntimeError) as e:
+        if json_out:
+            typer.echo(json.dumps({"ok": False, "error": str(e)}, indent=2))
+        else:
+            _err(f"Run failed: {e}")
+        raise typer.Exit(1)
+    if json_out:
+        typer.echo(json.dumps(summary, indent=2, default=str))
+    raise typer.Exit(0 if summary["ok"] else 1)
+
+
+# --------------------------------------------------------------------------- #
+# Manifest editing — every mutator emits {"ok", "path", "errors"} under --json
+# --------------------------------------------------------------------------- #
+
+def _read_for_edit(path: Path, json_out: bool) -> dict:
+    try:
+        return api.read_manifest(path)
+    except Exception as e:  # noqa: BLE001
+        if json_out:
+            typer.echo(json.dumps({"ok": False, "path": str(path), "errors": [f"could not read {path}: {e}"]}, indent=2))
+        else:
+            _err(f"Could not read {path}: {e}")
+        raise typer.Exit(1)
+
+
+def _save_and_report(manifest: dict, path: Path, root: Path, json_out: bool, *, verb: str = "Wrote") -> None:
+    """Dump + validate, then report. Exit 0 even when not-yet-runnable (errors are
+    surfaced) so a manifest can be built incrementally; exit 1 only if the dump is
+    rejected as structurally invalid."""
+    try:
+        api.dump_manifest(manifest, path, root)
+    except ValueError as e:
+        if json_out:
+            typer.echo(json.dumps({"ok": False, "path": str(path), "errors": [str(e)]}, indent=2))
+        else:
+            _err(f"Not written: {e}")
+        raise typer.Exit(1)
+    errors = api.validate(manifest, root)
+    if json_out:
+        typer.echo(json.dumps({"ok": not errors, "path": str(path), "errors": errors}, indent=2))
+        return
+    typer.echo(f"{verb} {path}")
+    if errors:
+        _err("  (manifest saved but not yet runnable):")
+        for e in errors:
+            _err(f"    {e}")
+
+
+@manifest_app.command("init")
+def manifest_init(
+    output_dir: str = typer.Option("./evidence", "--output-dir", help="Default run output dir"),
+    file: str = typer.Option(_DEFAULT_MANIFEST, "-f", "--file", help="Manifest path"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
+):
+    """Create a new empty manifest file."""
+    root = api.find_repo_root()
+    m = api.init_manifest(output_dir)
+    _save_and_report(m, Path(file).resolve(), root, json_out)
+
+
+@manifest_app.command("new")
+def manifest_new(
+    name: str = typer.Argument(..., help="Manifest name (created under manifests/<name>.yaml)"),
+    output_dir: str = typer.Option("./evidence", "--output-dir", help="Default run output dir"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
+):
+    """Create a fresh manifest at manifests/<name>.yaml (the picker convention)."""
+    root = api.find_repo_root()
+    try:
+        path = api.new_manifest_path(root, name, output_dir)
+    except (FileExistsError, ValueError) as e:
+        if json_out:
+            typer.echo(json.dumps({"ok": False, "path": None, "errors": [str(e)]}, indent=2))
+        else:
+            _err(f"Not created: {e}")
+        raise typer.Exit(1)
+    errors = api.validate(api.read_manifest(path), root)
+    if json_out:
+        typer.echo(json.dumps({"ok": not errors, "path": str(path), "errors": errors}, indent=2))
+        return
+    typer.echo(f"Created {path}")
+    if errors:
+        _err("  (empty manifest — add fetchers before it can run)")
+
+
+@manifest_app.command("add")
+def manifest_add(
+    fetcher: str = typer.Argument(..., help="Fetcher name to add"),
+    file: str = typer.Option(_DEFAULT_MANIFEST, "-f", "--file", help="Manifest path"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
+):
+    """Add a fetcher entry to the manifest."""
+    root = api.find_repo_root()
+    path = Path(file).resolve()
+    m = _read_for_edit(path, json_out)
+    api.add_entry(m, fetcher)
+    _save_and_report(m, path, root, json_out)
+
+
+@manifest_app.command("remove")
+def manifest_remove(
+    fetcher: str = typer.Argument(..., help="Fetcher name to remove"),
+    file: str = typer.Option(_DEFAULT_MANIFEST, "-f", "--file", help="Manifest path"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
+):
+    """Remove a fetcher entry from the manifest."""
+    root = api.find_repo_root()
+    path = Path(file).resolve()
+    m = _read_for_edit(path, json_out)
+    api.remove_entry(m, fetcher)
+    _save_and_report(m, path, root, json_out)
+
+
+@manifest_app.command("set-config")
+def manifest_set_config(
+    fetcher: str = typer.Argument(..., help="Fetcher name"),
+    kv: str = typer.Argument(..., help="key=value"),
+    file: str = typer.Option(_DEFAULT_MANIFEST, "-f", "--file", help="Manifest path"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
+):
+    """Set a config key on a fetcher entry."""
+    root = api.find_repo_root()
+    path = Path(file).resolve()
+    m = _read_for_edit(path, json_out)
+    key, raw = _parse_kv(kv, path, json_out)
+    value = _coerce_or_fail(raw, _config_type(root, fetcher, key), key, path, json_out)
+    api.set_fetcher_config(m, fetcher, key, value)
+    _save_and_report(m, path, root, json_out)
+
+
+@manifest_app.command("set-secret")
+def manifest_set_secret(
+    fetcher: str = typer.Argument(..., help="Fetcher name"),
+    secret_name: str = typer.Argument(..., help="Secret declared in the fetcher's contract"),
+    env_var: str = typer.Argument(..., help="ENV VAR NAME holding the secret (not the value)"),
+    file: str = typer.Option(_DEFAULT_MANIFEST, "-f", "--file", help="Manifest path"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
+):
+    """Set a secret reference (${env:VAR}) on a fetcher entry."""
+    root = api.find_repo_root()
+    path = Path(file).resolve()
+    m = _read_for_edit(path, json_out)
+    api.set_secret(m, fetcher, secret_name, env_var)
+    _save_and_report(m, path, root, json_out)
+
+
+@manifest_app.command("add-target")
+def manifest_add_target(
+    fetcher: str = typer.Argument(..., help="Fanout fetcher name"),
+    values: Optional[List[str]] = typer.Argument(None, help="target field key=value pairs"),
+    secret: Optional[List[str]] = typer.Option(None, "--secret", help="per_target secret name=ENV_VAR (repeatable)"),
+    file: str = typer.Option(_DEFAULT_MANIFEST, "-f", "--file", help="Manifest path"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
+):
+    """Append a fanout target (with optional per-target secrets) to a fetcher."""
+    root = api.find_repo_root()
+    path = Path(file).resolve()
+    m = _read_for_edit(path, json_out)
+    vals = {}
+    for kv in (values or []):
+        k, raw = _parse_kv(kv, path, json_out)
+        vals[k] = _coerce_or_fail(raw, _target_field_type(root, fetcher, k), k, path, json_out)
+    secret_env = {}
+    for s in (secret or []):
+        k, v = _parse_kv(s, path, json_out)
+        secret_env[k] = v
+    api.add_target(m, fetcher, vals, secret_env or None)
+    _save_and_report(m, path, root, json_out)
+
+
+@manifest_app.command("remove-target")
+def manifest_remove_target(
+    fetcher: str = typer.Argument(..., help="Fanout fetcher name"),
+    index: int = typer.Argument(..., help="Zero-based index of the target to remove"),
+    file: str = typer.Option(_DEFAULT_MANIFEST, "-f", "--file", help="Manifest path"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
+):
+    """Remove the fanout target at the given index from a fetcher entry."""
+    root = api.find_repo_root()
+    path = Path(file).resolve()
+    m = _read_for_edit(path, json_out)
+    api.remove_target(m, fetcher, index)
+    _save_and_report(m, path, root, json_out)
+
+
+@manifest_app.command("set-platform-config")
+def manifest_set_platform_config(
+    category: str = typer.Argument(..., help="Platform category name"),
+    kv: str = typer.Argument(..., help="key=value"),
+    file: str = typer.Option(_DEFAULT_MANIFEST, "-f", "--file", help="Manifest path"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
+):
+    """Set a platform-wide config key for a category."""
+    root = api.find_repo_root()
+    path = Path(file).resolve()
+    m = _read_for_edit(path, json_out)
+    key, raw = _parse_kv(kv, path, json_out)
+    value = _coerce_or_fail(raw, _platform_config_type(root, category, key), key, path, json_out)
+    api.set_platform_config(m, category, key, value)
+    _save_and_report(m, path, root, json_out)
+
+
+@manifest_app.command("set-passthrough")
+def manifest_set_passthrough(
+    category: str = typer.Argument(..., help="Platform category name"),
+    env_vars: List[str] = typer.Argument(..., help="Ambient ENV VAR names to pass through"),
+    file: str = typer.Option(_DEFAULT_MANIFEST, "-f", "--file", help="Manifest path"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
+):
+    """Set the ambient passthrough env vars for a platform category."""
+    root = api.find_repo_root()
+    path = Path(file).resolve()
+    m = _read_for_edit(path, json_out)
+    api.set_passthrough_env(m, category, env_vars)
+    _save_and_report(m, path, root, json_out)
+
+
+@manifest_app.command("set-output-dir")
+def manifest_set_output_dir(
+    output_dir: str = typer.Argument(..., help="Output directory for run artifacts"),
+    file: str = typer.Option(_DEFAULT_MANIFEST, "-f", "--file", help="Manifest path"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
+):
+    """Set the manifest's run output directory."""
+    root = api.find_repo_root()
+    path = Path(file).resolve()
+    m = _read_for_edit(path, json_out)
+    api.set_output_dir(m, output_dir)
+    _save_and_report(m, path, root, json_out)
+
+
+@manifest_app.command("show")
+def manifest_show(
+    file: str = typer.Option(_DEFAULT_MANIFEST, "-f", "--file", help="Manifest path"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
+):
+    """Print the current manifest (YAML, or JSON with --json). No write, no validation."""
+    path = Path(file).resolve()
+    try:
+        m = api.read_manifest(path)
+    except Exception as e:  # noqa: BLE001
+        _err(f"Could not read {path}: {e}")
+        raise typer.Exit(1)
+    if json_out:
+        typer.echo(json.dumps(m, indent=2))
+    else:
+        import yaml
+        typer.echo(yaml.safe_dump(m, sort_keys=False))
+
+
+# --------------------------------------------------------------------------- #
+# Launch the other front-ends — one CLI steers everything
+# --------------------------------------------------------------------------- #
+
+@app.command("tui")
+def tui_cmd(
+    manifest: Optional[str] = typer.Option(None, "--manifest", help="Manifest to open directly, skipping the welcome screen"),
+    at: Optional[str] = typer.Option(None, "--at", help="Repo root override (default: discovered by walking up)"),
+):
+    """Launch the interactive terminal UI."""
+    try:
+        from framework.tui.__main__ import launch
+    except ImportError as e:
+        _err(f"The TUI requires the 'tui' extra (textual). Install it:  pip install 'paramify[tui]'\n  ({e})")
+        raise typer.Exit(1)
+    launch(manifest, at)
+
+
+@app.command("web")
+def web_cmd(
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind host"),
+    port: int = typer.Option(8765, "--port", help="Bind port"),
+    reload: bool = typer.Option(False, "--reload", help="Auto-reload on code changes"),
+):
+    """Launch the web UI (FastAPI single-page app)."""
+    try:
+        from framework.web.__main__ import launch
+    except ImportError as e:
+        _err(f"The web UI requires the 'web' extra (fastapi, uvicorn). Install it:  pip install 'paramify[web]'\n  ({e})")
+        raise typer.Exit(1)
+    launch(host, port, reload)
+
+
+if __name__ == "__main__":
+    app()

@@ -33,25 +33,37 @@ Four pieces, kept deliberately separate:
   config into environment variables, and executes each fetcher.
 
 Everything goes through one facade, `framework.api` — discovery, manifest
-editing, validation, and running. Three front-ends sit on top of it and behave
-identically because they share that single code path:
+editing, validation, and running. One CLI, `paramify`, sits on top of it and
+steers every front-end; because they all share that single code path they behave
+identically. Install it once from the repo (editable), then:
 
 ```bash
-python -m framework.runner <cmd>          # human CLI
-python -m framework.runner <cmd> --json   # same commands, machine-readable (for AI/scripts)
-python -m framework.web                   # web UI (FastAPI single-page app, runs streamed
-                                          # over Server-Sent Events; default 127.0.0.1:8765)
+pip install -e .                  # installs the `paramify` command
+                                  # (use `pip install -e '.[all]'` to add the web UI + TUI)
+
+paramify <cmd>                    # human CLI
+paramify <cmd> --json             # same commands, machine-readable (for AI/scripts)
+paramify tui                      # interactive terminal UI
+paramify web                      # web UI (FastAPI single-page app, runs streamed
+                                  # over Server-Sent Events; default 127.0.0.1:8765)
 ```
+
+> Back-compat: `python -m framework.runner <cmd>`, `python -m framework.tui`, and
+> `python -m framework.web` still work and are exactly equivalent to the
+> corresponding `paramify` subcommands.
 
 The CLI command surface:
 
 ```bash
-python -m framework.runner list                  # discovered fetchers (flat)
-python -m framework.runner catalog                # categories → fetchers → editable fields
-python -m framework.runner describe <fetcher>     # one fetcher's config / secrets / target fields
-python -m framework.runner validate <manifest>    # validate a manifest without running
-python -m framework.runner run      <manifest>    # run it
-python -m framework.runner manifest <sub>         # build/edit a manifest (see below)
+paramify list                  # discovered fetchers (flat)
+paramify catalog               # categories → fetchers → editable fields
+paramify describe <fetcher>    # one fetcher's config / secrets / target fields
+paramify manifests             # discovered run manifests (manifests/*.yaml)
+paramify validate <manifest>   # validate a manifest without running
+paramify run      <manifest>   # run it
+paramify runs                  # past runs under an output dir (newest first)
+paramify evidence <file>       # read one evidence file (normalizing the envelope)
+paramify manifest <sub>        # build/edit a manifest (see below)
 ```
 
 Output lands in `<output_dir>/run-<UTC-timestamp>/`, one JSON file per fetcher
@@ -64,22 +76,28 @@ the `evidence_set` identity; failed invocations also get a `stderr_tail`. The
 
 ### Building a manifest
 
-`python -m framework.runner manifest <sub>` edits a manifest file in place
-(`-f/--file`, default `./manifest.yaml`). It reads each `fetcher.yaml` and warns
-which secrets and config are still missing until the manifest is runnable.
+`paramify manifest <sub>` edits a manifest file in place (`-f/--file`, default
+`./manifest.yaml`). It reads each `fetcher.yaml` and warns which secrets and
+config are still missing until the manifest is runnable.
 
 ```bash
-manifest init [--output-dir DIR]                     # start a manifest
-manifest add <fetcher>                               # add a fetcher
-manifest remove <fetcher>
-manifest set-config <fetcher> key=value
-manifest set-secret <fetcher> <secret_name> <ENV_VAR>
-manifest add-target <fetcher> k=v ... [--secret name=ENV_VAR ...]
-manifest set-platform-config <category> key=value
-manifest set-passthrough <category> ENV_VAR ...
-manifest set-output-dir <dir>
-manifest show [--json]
+paramify manifest init [--output-dir DIR]            # start a manifest at -f/--file
+paramify manifest new <name> [--output-dir DIR]      # create manifests/<name>.yaml
+paramify manifest add <fetcher>                      # add a fetcher
+paramify manifest remove <fetcher>
+paramify manifest set-config <fetcher> key=value
+paramify manifest set-secret <fetcher> <secret_name> <ENV_VAR>
+paramify manifest add-target <fetcher> k=v ... [--secret name=ENV_VAR ...]
+paramify manifest remove-target <fetcher> <index>
+paramify manifest set-platform-config <category> key=value
+paramify manifest set-passthrough <category> ENV_VAR ...
+paramify manifest set-output-dir <dir>
+paramify manifest show [--json]
 ```
+
+Every `manifest` subcommand also accepts `--json`, emitting a stable
+`{"ok", "path", "errors"}` object — so an agent can build a manifest step by step
+and read `errors` to see what's still missing.
 
 ### Collect, then upload
 
@@ -87,7 +105,7 @@ Collection and upload are separate stages on purpose. The runner only collects;
 pushing to Paramify is a second step, run against the enveloped run directory:
 
 ```bash
-python -m framework.runner run manifest.yaml         # collect → enveloped JSON in run-<ts>/
+paramify run manifest.yaml                           # collect → enveloped JSON in run-<ts>/
 python -m uploaders.paramify_evidence <run-dir>      # upload that run (get-or-create evidence
                                                      # set by reference_id, multipart artifacts)
 ```
@@ -146,8 +164,10 @@ the rationale is in [`docs/design.md`](docs/design.md).
 framework/                      # shared code (facade, runner, contract, schemas)
   api.py                        # the facade — discovery, manifest edit, validate, run
   schemas/                      # fetcher / manifest / category JSON Schemas
-  runner/                       # human + --json CLI: list | catalog | describe | validate | run | manifest
-  web.py                        # web UI front-end (FastAPI + SSE)
+  cli.py                        # the `paramify` CLI — one command, steers every front-end
+  runner/                       # executor + manifest loader (+ `python -m framework.runner` shim)
+  tui/                          # terminal UI front-end (Textual)
+  web/                          # web UI front-end (FastAPI + SSE)
 fetchers/
   _categories/<name>.yaml       # platform-wide config + auth for a category
   _template/                    # copy this to start a new fetcher
@@ -238,7 +258,7 @@ nothing.
 Verify the YAML before writing code:
 
 ```bash
-python -m framework.runner list   # your fetcher should appear; errors mean fix the yaml
+paramify list   # your fetcher should appear; errors mean fix the yaml
 ```
 
 ### 3. Write the entry script
@@ -293,8 +313,8 @@ data means your failure detection (step 3) is wrong. For bash, run
 Add the fetcher to a manifest (see `examples/`), then:
 
 ```bash
-python -m framework.runner validate path/to/manifest.yaml
-python -m framework.runner run      path/to/manifest.yaml
+paramify validate path/to/manifest.yaml
+paramify run      path/to/manifest.yaml
 ```
 
 Confirm the JSON lands in the run directory and the contents look right.

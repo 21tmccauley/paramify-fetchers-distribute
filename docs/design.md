@@ -168,15 +168,15 @@ Manifests also carry per-category platform settings under `run.platforms.<catego
 
 ---
 
-## One facade, three front-ends
+## One facade, one CLI, three front-ends
 
-All operations against the framework — discover fetchers, build/edit a manifest, validate, run — go through a single facade, `framework/api.py`. Three front-ends sit on top of it and call **only** the facade, so their behavior is identical:
+All operations against the framework — discover fetchers, build/edit a manifest, validate, run — go through a single facade, `framework/api.py`. A single `paramify` CLI (installed via `pip install -e .`) steers every front-end, and they call **only** the facade, so their behavior is identical:
 
-1. **Human CLI** — `python -m framework.runner <cmd>`
+1. **Human CLI** — `paramify <cmd>`
 2. **AI CLI** — the same commands with `--json` for machine-readable output
-3. **Web UI** — `python -m framework.web`, a FastAPI single-page app (default `127.0.0.1:8765`) that streams runs as Server-Sent Events
+3. **Web UI** — `paramify web`, a FastAPI single-page app (default `127.0.0.1:8765`) that streams runs as Server-Sent Events; the terminal UI is `paramify tui`
 
-Keeping the surface in one facade means a new capability lands once and shows up in all three front-ends, and there's no risk of the CLI and UI drifting.
+Keeping the surface in one facade means a new capability lands once and shows up in all three front-ends, and there's no risk of the CLI and UI drifting. (`python -m framework.runner|tui|web` still work and equal the matching `paramify` subcommands.)
 
 ### CLI command surface
 
@@ -299,7 +299,7 @@ paramify-fetchers/
 │   ├── contract.py                   # dataclasses (Fetcher, Manifest, RunResult, ...)
 │   ├── config_loader.py              # discover fetchers; validate against schema
 │   ├── secret_resolver.py            # ${env:VAR_NAME} resolution
-│   ├── web.py                        # `python -m framework.web` — FastAPI single-page UI (SSE)
+│   ├── web.py                        # `paramify web` — FastAPI single-page UI (SSE)
 │   ├── runner/
 │   │   ├── __init__.py               # CLI front-end (list/catalog/describe/validate/run/manifest)
 │   │   ├── __main__.py               # entry point for `python -m framework.runner`
@@ -405,7 +405,7 @@ progress lives in [`handoff.md`](handoff.md).** Snapshot: 56 fetchers across
 7 categories (okta, aws, sentinelone, knowbe4, gitlab, k8s, rippling); the
 AWS port is complete (30/30). The pieces that make this run:
 
-- **Facade + three front-ends** (`framework/api.py`) — all discovery, manifest editing, validate, and run go through one facade; the human CLI, the `--json` AI CLI, and the FastAPI web UI (`python -m framework.web`, SSE-streamed) all call only the facade
+- **Facade + three front-ends** (`framework/api.py`) — all discovery, manifest editing, validate, and run go through one facade; the human CLI, the `--json` AI CLI, and the FastAPI web UI (`paramify web`, SSE-streamed) all call only the facade
 - **Fetcher schema** (`framework/schemas/fetcher_schema.json`) — supports fanout: `supports_targets`, `target_schema`, `per_target` secrets, `output.aggregation`. Extended additively from the original minimal version.
 - **Runner** (`framework/runner/`) — `list` / `catalog` / `describe` / `validate` / `run` / `manifest` subcommands (all with `--json`); single-target + fanout execution via `subprocess.Popen` + streamed stdout, per-invocation timeout (default 600s, exit 124 on kill), per-target failure isolation, env-whitelist + config/secret/passthrough injection, secret resolution from `${env:...}` references, envelope wrapping, `_run_metadata.json` recording (run_id, per-invocation timestamps, durations, exit codes, outputs)
 - **Manifest schema** (`framework/schemas/run_manifest_schema.json`) + builder CLI (`manifest` subcommands) + working examples (`examples/minimal_run.yaml`, `multi_region_aws.yaml`, `full_compliance_run.yaml`, ...)

@@ -12,14 +12,14 @@ expense-tracker TUI. It is a design + implementation plan, not a tutorial.
 
 Bagels' whole design rests on one rule: **the UI talks only to its
 `managers/*` layer, never to the database.** paramify-fetchers already enforces
-the identical rule with `framework/api.py` — per `CLAUDE.md`, *"three front-ends
-call ONLY `framework.api` so behavior is identical."* The human CLI
-(`python -m framework.runner`), the AI `--json` CLI, and the FastAPI web UI
-(`python -m framework.web`) all sit on that one facade.
+the identical rule with `framework/api.py` — per `CLAUDE.md`, the front-ends
+*call ONLY `framework.api` so behavior is identical.* One unified `paramify`
+CLI steers every front-end: the human CLI (`paramify`), the AI `--json` CLI,
+and the FastAPI web UI (`paramify web`) all sit on that one facade.
 
-**A TUI is simply front-end #4 over the same facade.** No domain logic, no
-persistence, and no subprocess handling needs to be re-implemented — the TUI is
-pure presentation. The web UI already proved the facade is GUI-sufficient: it
+**The TUI (`paramify tui`) is simply another front-end over the same facade.**
+No domain logic, no persistence, and no subprocess handling needs to be
+re-implemented — the TUI is pure presentation. The web UI already proved the facade is GUI-sufficient: it
 pipes `api.run()`'s `on_event` dicts through a thread+queue into a Server-Sent-
 Events stream (`framework/web/server.py`). A Textual worker collapses that
 bridge to a single `@work(thread=True)` call plus a message pump.
@@ -225,7 +225,7 @@ Mirrors `framework/web/`'s package shape and honors the "front-ends call ONLY
 ```
 framework/tui/
 ├── __init__.py
-├── __main__.py            # python -m framework.tui [--manifest PATH] [--at ROOT]
+├── __main__.py            # paramify tui [--manifest PATH] [--at ROOT]
 ├── app.py                 # FetcherApp(App): TabbedContent, shared state, tab-focus
 ├── render.py              # Rich renderers: fetcher contract + manifest-entry detail
 ├── modals.py              # FormModal / PickerModal / ConfirmModal / PreviewModal  (Phase 2)
@@ -243,7 +243,9 @@ framework/tui/
 ```
 
 `framework/tui/__main__.py` deliberately parallels `framework/web/__main__.py`:
-`python -m framework.tui` launches the app, mirroring `python -m framework.web`.
+`paramify tui` launches the app, mirroring `paramify web`. (`python -m
+framework.tui|web|runner` still work and equal the matching `paramify`
+subcommands.)
 
 ## 6. Dependencies & license
 

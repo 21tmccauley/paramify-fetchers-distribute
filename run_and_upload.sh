@@ -19,7 +19,8 @@ MANIFEST="${MANIFEST:-manifest.yaml}"
 export PARAMIFY_API_BASE_URL="${PARAMIFY_API_BASE_URL:-https://stage.paramify.com/api/v0}"
 
 echo "==> collect: $MANIFEST"
-.venv/bin/python -m framework.runner run "$MANIFEST"
+# Requires the package installed in the venv: pip install -e .
+.venv/bin/paramify run "$MANIFEST"
 collect_rc=$?
 if [ $collect_rc -ne 0 ]; then
     echo "WARN: collect exited $collect_rc (a fetcher reported failures); uploading whatever was produced" >&2

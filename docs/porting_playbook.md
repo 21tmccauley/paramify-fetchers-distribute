@@ -131,16 +131,19 @@ The runner copies `evidence_set` into each output's envelope metadata.
 **Verify:**
 
 ```bash
-.venv/bin/python -m framework.runner list
-.venv/bin/python -m framework.runner describe <category>_<short_name>
+paramify list
+paramify describe <category>_<short_name>
 ```
 
 Your fetcher should appear in `list` with the right runtime and `[fanout]` or
 `[single]` reflecting `supports_targets`; `describe` echoes back its config,
 secrets, and target fields. If either errors, fix the yaml before continuing.
-Add `--json` to any command for the AI/machine-readable form. The runner, the
-`--json` CLI, and the web UI (`python -m framework.web`) all call the same
+Add `--json` to any command for the AI/machine-readable form. One `paramify`
+CLI steers every front-end — the same commands with `--json`, plus
+`paramify tui` and `paramify web` as subcommands — and they all call the same
 `framework.api` facade, so what `describe` reports is exactly what a run sees.
+(`python -m framework.runner|tui|web` still work and equal the matching
+`paramify` subcommands.)
 
 ### 5. Write the entry script
 
@@ -288,12 +291,12 @@ convenience path, not the canonical one.
 .venv/bin/python fetchers/<category>/<short_name>/fetcher.py
 
 # Or build a manifest and run it through the runner:
-.venv/bin/python -m framework.runner manifest init
-.venv/bin/python -m framework.runner manifest add <category>_<short_name>
-.venv/bin/python -m framework.runner manifest set-secret <category>_<short_name> <secret_name> <ENV_VAR>
+paramify manifest init
+paramify manifest add <category>_<short_name>
+paramify manifest set-secret <category>_<short_name> <secret_name> <ENV_VAR>
 # (the manifest builder warns which secrets/config are still missing until runnable)
-.venv/bin/python -m framework.runner validate manifest.yaml
-.venv/bin/python -m framework.runner run manifest.yaml
+paramify validate manifest.yaml
+paramify run manifest.yaml
 ```
 
 A direct invocation writes the raw evidence dict your fetcher produces. A run

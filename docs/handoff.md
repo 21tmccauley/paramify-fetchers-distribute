@@ -11,11 +11,12 @@ For project overview see [`design.md`](design.md). For porting procedure see [`p
 ## What's built
 
 **Framework** (`framework/`):
-- **`framework/api.py` is THE FACADE.** All discovery (catalog/describe), manifest editing, validate, and run go through it. Three front-ends call *only* `framework.api`, so behavior is identical across all three:
-  - **human CLI:** `python -m framework.runner`
+- **`framework/api.py` is THE FACADE.** All discovery (catalog/describe), manifest editing, validate, and run go through it. One `paramify` CLI steers every front-end — all call *only* `framework.api`, so behavior is identical across all three:
+  - **human CLI:** `paramify`
   - **AI CLI:** the same commands with `--json`
-  - **web UI:** `python -m framework.web` (FastAPI single-page app; runs stream as Server-Sent Events; default `127.0.0.1:8765`)
-- CLI command surface (`python -m framework.runner <cmd>`):
+  - **web UI:** `paramify web` (FastAPI single-page app; runs stream as Server-Sent Events; default `127.0.0.1:8765`), plus `paramify tui` for the terminal UI
+  - (`python -m framework.runner|tui|web` still work and equal the matching `paramify` subcommands.)
+- CLI command surface (`paramify <cmd>`):
   - `list [--json]` — discovered fetchers (flat)
   - `catalog [--json]` — categories → fetchers → editable fields
   - `describe <fetcher> [--json]` — one fetcher's config/secrets/target fields
@@ -250,25 +251,25 @@ Three framework pieces would unblock most of these:
 # Add --json to list/catalog/describe/validate/run/manifest show for AI/automation.
 
 # List discovered fetchers (also schema-validates each yaml):
-.venv/bin/python -m framework.runner list
+paramify list
 
 # Catalog (categories -> fetchers -> editable fields) and per-fetcher detail:
-.venv/bin/python -m framework.runner catalog
-.venv/bin/python -m framework.runner describe aws_iam_roles
+paramify catalog
+paramify describe aws_iam_roles
 
 # Build a manifest with the builder CLI (default ./manifest.yaml; -f to target another file):
-.venv/bin/python -m framework.runner manifest init --output-dir ./evidence
-.venv/bin/python -m framework.runner manifest add aws_iam_roles
-.venv/bin/python -m framework.runner manifest add-target aws_iam_roles profile=prod region=us-east-1
-.venv/bin/python -m framework.runner manifest set-passthrough aws AWS_PROFILE AWS_DEFAULT_REGION
-.venv/bin/python -m framework.runner manifest show
+paramify manifest init --output-dir ./evidence
+paramify manifest add aws_iam_roles
+paramify manifest add-target aws_iam_roles profile=prod region=us-east-1
+paramify manifest set-passthrough aws AWS_PROFILE AWS_DEFAULT_REGION
+paramify manifest show
 
 # Validate / run a manifest:
-.venv/bin/python -m framework.runner validate examples/minimal_run.yaml
-.venv/bin/python -m framework.runner run examples/minimal_run.yaml
+paramify validate examples/minimal_run.yaml
+paramify run examples/minimal_run.yaml
 
 # Web UI (FastAPI single-page app; runs stream as SSE; default 127.0.0.1:8765):
-.venv/bin/python -m framework.web
+paramify web
 
 # Upload an enveloped run dir to Paramify (separate stage):
 .venv/bin/python uploaders/paramify_evidence/uploader.py --dry-run <output_dir>/run-<UTC-timestamp>
@@ -359,10 +360,10 @@ What's left is new categories and the framework pieces that gate them (see
 - **Checkov** (2 bash) and **Azure** (no source ported) are not framework-blocked, just unstarted.
 
 Pick a framework piece, then the script. All work routes through `framework.api`
-(the human CLI, the `--json` AI CLI, and the `python -m framework.web` UI all
+(the human CLI, the `--json` AI CLI, and the `paramify web` UI all
 share it — change behavior there, not in a front-end). For a fresh fetcher/port,
 follow [`docs/ai_port_recipe.md`](ai_port_recipe.md) and verify with
-`python -m framework.runner list`, `bash -n`, and a fake-cred smoke (expect exit 1).
+`paramify list`, `bash -n`, and a fake-cred smoke (expect exit 1).
 The 3 fetchers without `evidence_set.instructions` (`aws_rds_tls_configuration`,
 `okta_authenticators`, `rippling_devices`) are also worth filling.
 
@@ -371,7 +372,7 @@ The 3 fetchers without `evidence_set.instructions` (`aws_rds_tls_configuration`,
 ## State summary (TL;DR)
 
 - **56 fetchers across 7 categories** (aws 30, okta 8, sentinelone 5, knowbe4 4, gitlab 3, k8s 3, rippling 3). All 30 AWS are fanout (22 regional, 5 global profile-only, 3 mixed-scope).
-- **`framework/api.py` is the single facade** behind 3 front-ends: human CLI (`python -m framework.runner`), AI CLI (same + `--json`), and web UI (`python -m framework.web`, FastAPI/SSE). A manifest-builder CLI (`manifest <sub>`) reads each `fetcher.yaml` and reports what's still missing.
+- **`framework/api.py` is the single facade** behind 3 front-ends, all steered by one `paramify` CLI: human CLI (`paramify`), AI CLI (same + `--json`), and web UI (`paramify web`, FastAPI/SSE; `paramify tui` for the terminal UI). A manifest-builder CLI (`manifest <sub>`) reads each `fetcher.yaml` and reports what's still missing.
 - **Built:** config injection + `auth.passthrough_env`, envelope wrapping (`{schema_version, metadata, payload}`), `evidence_set` identity backfilled onto all 56, the `paramify_evidence` uploader, per-invocation timeout (124 on kill), `stderr_tail` on failure, AWS region/profile fanout. Collect→upload glue example: `run_and_upload.sh`.
 - **Not built:** `paramify_issues` uploader (empty stub → blocks Wiz); comparators / `depends_on` / retry / logger (empty stubs); `aggregate` fanout mode (declared, unused). `azure`/`checkov`/`ssllabs`/`wiz` are category-yaml stubs with **no ported fetchers**.
 - Exit codes still binary 0/1 (plus 124 = runner timeout-kill).

@@ -6,7 +6,7 @@ description: >
   secrets/config/targets a fetcher needs. Use when the user just made a fetcher
   and wants to add it, asks "why won't my fetcher run", or wants to verify their
   manifest can run a specific fetcher. Reads the manifest, diffs it against the
-  fetcher's contract, and emits the exact `framework.runner manifest` commands
+  fetcher's contract, and emits the exact `paramify manifest` commands
   to close the gaps.
 ---
 
@@ -21,7 +21,7 @@ their checks.
 - The manifest's `run.fetchers:` list IS the "what to run" decision. A fetcher
   that exists on disk but isn't in the manifest **never runs**. Presence is the
   first thing to check.
-- Edit via the `framework.runner manifest` subcommands, never hand-edit YAML —
+- Edit via the `paramify manifest` subcommands, never hand-edit YAML —
   they coerce field types and re-validate on write. Hand-editing is a fallback,
   not the path.
 - Secrets are wired as `${env:VAR_NAME}` refs — you set the **env var name**,
@@ -36,17 +36,17 @@ their checks.
 ## Phase 0 — Identify the fetcher and the manifest
 
 1. **Which fetcher?** The one the user just made, or a name they give. If unsure,
-   `.venv/bin/python -m framework.runner list` shows discovered fetchers.
+   `paramify list` shows discovered fetchers.
 
 2. **Which manifest?** Default `./manifest.yaml` (the runner's default; override
    with `-f`). If it doesn't exist yet:
    ```bash
-   .venv/bin/python -m framework.runner manifest init   # writes manifest.yaml with output_dir
+   paramify manifest init   # writes manifest.yaml with output_dir
    ```
 
 3. **Confirm the fetcher is discoverable** before touching the manifest:
    ```bash
-   .venv/bin/python -m framework.runner describe <fetcher> --json
+   paramify describe <fetcher> --json
    ```
    If `describe` errors with "unknown fetcher", the problem is **discovery, not
    the manifest** — wrong directory, a `_`-prefixed dir, or a schema-invalid
@@ -59,7 +59,7 @@ their checks.
 - **Contract** — from `describe <fetcher> --json`: required vs optional
   `secrets`, `config`, `target_schema`, and the `supports_targets` flag (fanout
   or single). Note which secrets are `per_target`.
-- **Current manifest** — `.venv/bin/python -m framework.runner manifest show --json`
+- **Current manifest** — `paramify manifest show --json`
   (or read the file). Determine:
   - Is the fetcher present in `run.fetchers:` at all?
   - What `secrets` / `config` / `targets` are already wired on its entry?
@@ -71,7 +71,7 @@ their checks.
 
 1. **Run the authoritative check:**
    ```bash
-   .venv/bin/python -m framework.runner validate <manifest> --json
+   paramify validate <manifest> --json
    ```
    `validate` reports the structural gaps for entries **that are present**:
    unknown fetcher, fanout/target mismatch (targets on a single fetcher or none
@@ -107,7 +107,7 @@ Build the exact command sequence from the gaps. Map each gap to one command:
 | Fanout needs targets | `manifest add-target <fetcher> field=val ... --secret name=ENV_VAR` |
 | Ambient-cred var stripped | `manifest set-passthrough <category> VAR [VAR ...]` |
 
-All prefixed with `.venv/bin/python -m framework.runner`.
+All prefixed with `paramify`.
 
 The manifest is the **user's file** — before editing it, show the planned
 commands and ask whether to run them or just hand them over. Default to showing
@@ -119,7 +119,7 @@ first when several edits are involved.
 
 1. **Clean validate:**
    ```bash
-   .venv/bin/python -m framework.runner validate <manifest>
+   paramify validate <manifest>
    # expect: "OK  manifest valid; N fetcher entries"
    ```
 2. **Hand back the run command** and state the boundary plainly: a clean
@@ -127,7 +127,7 @@ first when several edits are involved.
    data is right — that's the user's real run to confirm. Remind them the
    `${env:VAR}` vars must be set in the shell first (Phase 2 step 3).
    ```bash
-   .venv/bin/python -m framework.runner run <manifest>
+   paramify run <manifest>
    ```
 
 ---

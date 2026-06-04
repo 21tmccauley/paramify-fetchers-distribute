@@ -1,7 +1,7 @@
 """Facade for the fetcher framework — one source of truth for every front-end.
 
-Both the CLI (`framework.runner`, driven by humans and AIs) and the web UI
-(`framework.web`) call ONLY this module. They never re-implement discovery,
+The unified `paramify` CLI (driven by humans and AIs), the `paramify tui`, and
+the `paramify web` UI call ONLY this module. They never re-implement discovery,
 validation, manifest editing, or execution; they differ only in how they render
 the JSON-able values these functions return.
 

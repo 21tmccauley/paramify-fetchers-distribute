@@ -1,11 +1,19 @@
 """Launch the TUI: python -m framework.tui [--manifest PATH] [--at ROOT]
 
-Deliberately parallels framework/web/__main__.py so the front-ends share a shape.
+Both this module entry point and the unified CLI's `paramify tui` subcommand
+call launch(), so the two paths stay in lock-step. Deliberately parallels
+framework/web/__main__.py so the front-ends share a shape.
 """
 
 import argparse
+from typing import Optional
 
 from framework.tui.app import FetcherApp
+
+
+def launch(manifest: Optional[str] = None, at: Optional[str] = None) -> None:
+    """Run the terminal UI. Shared by `paramify tui` and `python -m framework.tui`."""
+    FetcherApp(manifest_path=manifest, root_override=at).run()
 
 
 def main() -> None:
@@ -24,7 +32,7 @@ def main() -> None:
         help="repo root override (default: discovered by walking up)",
     )
     args = parser.parse_args()
-    FetcherApp(manifest_path=args.manifest, root_override=args.at).run()
+    launch(args.manifest, args.at)
 
 
 if __name__ == "__main__":

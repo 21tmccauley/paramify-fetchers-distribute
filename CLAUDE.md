@@ -57,22 +57,30 @@ be declared as a secret OR a config field, else the runner strips it. See
 
 ## Front-ends & API facade
 `framework/api.py` is the single facade — discovery, manifest editing,
-validate, and run all go through it. Three front-ends call ONLY
-`framework.api` so behavior is identical: the human CLI
-(`python -m framework.runner`), the AI CLI (same commands with `--json`),
-and the web UI (`python -m framework.web` — FastAPI single-page app, runs
-streamed as Server-Sent Events, default `127.0.0.1:8765`).
+validate, and run all go through it. One CLI, `paramify` (`framework/cli.py`, a
+Typer app installed via `pip install -e .`), steers every front-end and is a
+strict superset of what each can do; they call ONLY `framework.api` so behavior
+is identical: the human CLI (`paramify`), the AI CLI (same commands with
+`--json`), the terminal UI (`paramify tui`), and the web UI (`paramify web` —
+FastAPI single-page app, runs streamed as Server-Sent Events, default
+`127.0.0.1:8765`). Back-compat: `python -m framework.runner|tui|web` still work
+and are equivalent to the matching `paramify` subcommands.
 
-CLI surface (`python -m framework.runner <cmd>`, all accept `--json`):
+CLI surface (`paramify <cmd>`, all accept `--json`):
 - `list` — discovered fetchers (flat)
 - `catalog` — categories → fetchers → editable fields
 - `describe <fetcher>` — one fetcher's config/secrets/target fields
+- `manifests` — discovered run manifests (`manifests/*.yaml` + legacy `manifest.yaml`)
 - `validate <manifest>` / `run <manifest>`
+- `runs [--output-dir DIR]` — past runs under an output dir (newest first)
+- `evidence <file>` — read one evidence file (normalizing the envelope)
 - `manifest <sub>` — build/edit a manifest (`-f/--file`, default
-  `./manifest.yaml`): `init [--output-dir DIR]`, `add <fetcher>`,
+  `./manifest.yaml`; every sub emits `{ok,path,errors}` under `--json`):
+  `init [--output-dir DIR]`, `new <name>`, `add <fetcher>`,
   `remove <fetcher>`, `set-config <fetcher> key=value`,
   `set-secret <fetcher> <secret> <ENV_VAR>`,
   `add-target <fetcher> k=v ... [--secret name=ENV_VAR ...]`,
+  `remove-target <fetcher> <index>`,
   `set-platform-config <category> key=value`,
   `set-passthrough <category> ENV_VAR ...`, `set-output-dir <dir>`, `show`.
   The builder reads each `fetcher.yaml` and warns which secrets/config are

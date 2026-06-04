@@ -135,7 +135,7 @@ The skill verifies **wiring**, not data — it can't hit the user's real tenant.
 
 1. **Schema-valid + discovered:**
    ```bash
-   .venv/bin/python -m framework.runner list   # your fetcher appears, right [fanout]/[single]
+   paramify list   # your fetcher appears, right [fanout]/[single]
    ```
 2. **Entry script loads:**
    ```bash
@@ -164,7 +164,7 @@ The skill verifies **wiring**, not data — it can't hit the user's real tenant.
 5. **Wire it into a manifest.** A fetcher on disk does not run until it's in a
    manifest's `run.fetchers:`. To add it and fill in the secrets/config/targets
    it needs, use the `wire-manifest` skill (or, quickly:
-   `python -m framework.runner manifest add <fetcher>` then `validate`).
+   `paramify manifest add <fetcher>` then `validate`).
 
 ---
 

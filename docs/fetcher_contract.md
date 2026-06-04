@@ -94,18 +94,23 @@ Worked example: [`fetchers/gitlab/ci_cd_pipeline_config/fetcher.yaml`](../fetche
 
 ## Schema-level enforcement
 
-Discovery, validation, and runs all go through the `framework.api` facade. Three front-ends call only that facade — the human CLI (`python -m framework.runner`), the same CLI with `--json` for AI callers, and the web UI (`python -m framework.web`, a FastAPI single-page app streaming runs over Server-Sent Events) — so behavior is identical across them.
+Discovery, validation, and runs all go through the `framework.api` facade. One CLI, `paramify`, sits on top of it and steers every front-end — the human CLI (`paramify <cmd>`), the same commands with `--json` for AI callers, the terminal UI (`paramify tui`), and the web UI (`paramify web`, a FastAPI single-page app streaming runs over Server-Sent Events) — so behavior is identical across them. (`python -m framework.runner`, `python -m framework.tui`, and `python -m framework.web` still work and are exactly equivalent to the matching `paramify` subcommands.)
 
-The CLI command surface (`python -m framework.runner <cmd>`, each accepting `--json`):
+The CLI command surface (`paramify <cmd>`, each accepting `--json`):
 
 ```bash
-python -m framework.runner list                       # discovered fetchers (flat); walks fetchers/*/*/fetcher.yaml, validates each
-python -m framework.runner catalog                    # categories -> fetchers -> editable fields
-python -m framework.runner describe <fetcher>         # one fetcher's config/secrets/target fields
-python -m framework.runner validate <manifest.yaml>   # validates a manifest against the schema + against discovered fetchers
-python -m framework.runner run <manifest.yaml>        # collect: enveloped JSON + _run_metadata.json under the output dir
-python -m framework.runner manifest <sub>             # build/edit a manifest file (init/add/remove/set-config/set-secret/add-target/...)
+paramify list                       # discovered fetchers (flat); walks fetchers/*/*/fetcher.yaml, validates each
+paramify catalog                    # categories -> fetchers -> editable fields
+paramify describe <fetcher>         # one fetcher's config/secrets/target fields
+paramify manifests                  # discovered run manifests (manifests/*.yaml)
+paramify validate <manifest.yaml>   # validates a manifest against the schema + against discovered fetchers
+paramify run <manifest.yaml>        # collect: enveloped JSON + _run_metadata.json under the output dir
+paramify runs                       # past runs under the output dir (newest first)
+paramify evidence <file>            # read one evidence file (normalizing the envelope)
+paramify manifest <sub>             # build/edit a manifest file (init/new/add/remove/set-config/set-secret/add-target/remove-target/...)
 ```
+
+Every `manifest` subcommand also accepts `--json`, emitting a stable `{ok, path, errors}` object so an agent can build a manifest step by step and read `errors` to see what's still missing.
 
 `list`/`validate` fail with a non-zero exit if any `fetcher.yaml` is schema-invalid. The envelope the runner produces is validated against `envelope_schema.json`, but a fetcher's *runtime* behavior (exit codes, output paths, etc.) is not yet automatically verified — that arrives with integration tests.
 

@@ -209,29 +209,37 @@ Each invocation is killed if it exceeds its timeout (default 600s; override per 
 
 ## CLI
 
-The runner is a thin command surface over `framework.api`, the shared facade.
-Every command — human CLI, the AI CLI (same commands with `--json`), and the
-web UI (`python -m framework.web`) — goes through that one facade, so behavior
-is identical across front-ends. Nothing in the CLI re-implements discovery,
-validation, manifest editing, or execution.
+There is one `paramify` CLI (installed via `pip install -e .`), a thin command
+surface over `framework.api`, the shared facade. It steers every front-end:
+the human CLI, the AI CLI (same commands with `--json`), and the web/TUI
+front-ends as the `paramify web` and `paramify tui` subcommands — all through
+that one facade, so behavior is identical across front-ends. Nothing in the CLI
+re-implements discovery, validation, manifest editing, or execution.
+(`python -m framework.runner|tui|web` still work and equal the matching
+`paramify` subcommands.)
 
 ### Discover
 
 ```bash
-python -m framework.runner list [--json]              # discovered fetchers (flat)
-python -m framework.runner catalog [--json]           # categories -> fetchers -> editable fields
-python -m framework.runner describe <fetcher> [--json] # one fetcher's config/secrets/target fields
+paramify list [--json]              # discovered fetchers (flat)
+paramify catalog [--json]           # categories -> fetchers -> editable fields
+paramify describe <fetcher> [--json] # one fetcher's config/secrets/target fields
+paramify manifests [--json]         # discovered run manifests (manifests/*.yaml)
 ```
 
 ### Validate / run
 
 ```bash
-python -m framework.runner validate <manifest.yaml> [--json]   # validate without running
-python -m framework.runner run <manifest.yaml> [--json]        # run the manifest
+paramify validate <manifest.yaml> [--json]   # validate without running
+paramify run <manifest.yaml> [--json]        # run the manifest
+paramify runs [--json]                       # past runs under an output dir (newest first)
+paramify evidence <file> [--json]            # read one evidence file (normalizing the envelope)
 ```
 
 `--json` is available on every command and emits machine-readable output for
-the AI CLI; without it you get the human-readable rendering.
+the AI CLI; without it you get the human-readable rendering. Mutating commands
+return `{ok, path, errors}` under `--json` so a caller can confirm the write
+landed and surface any validation messages.
 
 ### Build / edit a manifest
 
@@ -241,16 +249,18 @@ which secrets/config are still missing, so you know when the manifest is
 runnable.
 
 ```bash
-python -m framework.runner manifest init [--output-dir DIR]
-python -m framework.runner manifest add <fetcher>
-python -m framework.runner manifest remove <fetcher>
-python -m framework.runner manifest set-config <fetcher> key=value
-python -m framework.runner manifest set-secret <fetcher> <secret_name> <ENV_VAR>
-python -m framework.runner manifest add-target <fetcher> k=v ... [--secret name=ENV_VAR ...]
-python -m framework.runner manifest set-platform-config <category> key=value
-python -m framework.runner manifest set-passthrough <category> ENV_VAR [ENV_VAR ...]
-python -m framework.runner manifest set-output-dir <dir>
-python -m framework.runner manifest show [--json]
+paramify manifest init [--output-dir DIR]            # start a manifest at -f/--file
+paramify manifest new <name> [--output-dir DIR]      # create manifests/<name>.yaml
+paramify manifest add <fetcher>
+paramify manifest remove <fetcher>
+paramify manifest set-config <fetcher> key=value
+paramify manifest set-secret <fetcher> <secret_name> <ENV_VAR>
+paramify manifest add-target <fetcher> k=v ... [--secret name=ENV_VAR ...]
+paramify manifest remove-target <fetcher> <index>
+paramify manifest set-platform-config <category> key=value
+paramify manifest set-passthrough <category> ENV_VAR [ENV_VAR ...]
+paramify manifest set-output-dir <dir>
+paramify manifest show [--json]
 ```
 
 `set-secret` and `add-target --secret` take the **ENV VAR NAME**, never the

@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paramify-fetchers"
+version = "0.1.0"
+description = "Paramify evidence fetcher framework — discover, build, run, and inspect evidence fetchers."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+
+# Base runtime: everything the headless `paramify` CLI and the runner need.
+# The web UI and the TUI are optional front-ends — install their extras to use
+# `paramify web` / `paramify tui`.
+dependencies = [
+    "python-dotenv",
+    "requests",
+    "pyyaml",
+    "jsonschema",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+web = ["fastapi", "uvicorn"]
+tui = ["textual>=1.0,<2.0"]
+checkov = ["checkov"]
+dev = ["pytest"]
+# Convenience: every front-end + dev tooling in one install.
+all = ["fastapi", "uvicorn", "textual>=1.0,<2.0", "checkov", "pytest"]
+
+# The single entry point. `paramify` steers every front-end: the headless
+# commands, plus `paramify tui` and `paramify web`. (Renaming later is a one-line
+# change here; add a second line to register an alias.)
+[project.scripts]
+paramify = "framework.cli:app"
+
+# Supported install is editable/source: `pip install -e .` in the clone. Only
+# the importable `framework` package's .py modules are shipped here. The data
+# files (framework/schemas/*.json, framework/tui/styles/*.tcss,
+# framework/web/static/*) are NOT packaged: schemas resolve via the
+# cwd-discovered repo root, while the TUI stylesheet and web static dir are read
+# relative to their own module files — both present in an editable/source tree.
+# A pure built wheel therefore can't serve the TUI/web (missing data files) or
+# run fetchers (they execute as subprocesses out of fetchers/, never shipped).
+# If a non-editable wheel is ever needed, add [tool.setuptools.package-data] for
+# those dirs and defer framework.web.server's create_app() out of import time.
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["framework*"]

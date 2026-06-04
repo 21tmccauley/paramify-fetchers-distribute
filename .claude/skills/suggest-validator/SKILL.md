@@ -44,7 +44,7 @@ they'll attach in Paramify, not an artifact this repo stores or executes.
 ## Phase 0 — Locate the fetcher and its newest real evidence
 
 1. **Which fetcher?** The one the user just tested, or a name they give.
-   `.venv/bin/python -m framework.runner list` shows discovered fetchers if
+   `paramify list` shows discovered fetchers if
    unsure. Read its `fetchers/<category>/<short_name>/fetcher.yaml` — you need its
    `evidence_set` and `description` in Phase 2.
 

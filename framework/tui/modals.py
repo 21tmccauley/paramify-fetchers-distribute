@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
-from textual import on
+from textual import events, on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -187,3 +187,8 @@ class PreviewModal(ModalScreen[None]):
 
     def action_close(self) -> None:
         self.dismiss(None)
+
+    def on_click(self, event: events.Click) -> None:
+        # Clicking outside the card returns to the page (in addition to esc/q/p).
+        if not self.query_one("#modal-card").region.contains(event.screen_x, event.screen_y):
+            self.dismiss(None)

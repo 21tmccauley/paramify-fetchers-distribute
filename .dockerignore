@@ -11,9 +11,13 @@ evidence/
 .mypy_cache
 .ruff_cache
 *_mock.svg
-# Never bake secrets or local working files into the image.
+# Never bake secrets into the image — they're injected at RUNTIME via compose
+# env_file. .dockerignore matching is path-anchored (NOT recursive like
+# .gitignore), so exclude env files at the root AND in any subdir (e.g. deploy/.env).
 .env
 .env.*
-!.env.example
+**/.env
+**/.env.*
+# Local working manifests (real ones live outside the image).
 manifest.yaml
 manifests/

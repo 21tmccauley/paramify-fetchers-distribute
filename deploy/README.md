@@ -29,6 +29,40 @@ cp deploy/.env.example deploy/.env
 Secrets are injected at run time and **never baked into the image**. To see the
 exact env vars a manifest needs, ask the tool (see step 3).
 
+### Where secrets come from (source-agnostic)
+The tool only reads env vars — it never talks to a secret store. "Pull from X"
+means "get the values into the container's environment before `paramify run`."
+Three options, in order of preference:
+
+1. **AWS Secrets Manager via this bundle (built in).** Store one SM secret as a
+   JSON object of `VAR -> value`, then set `PARAMIFY_SECRETS_ID` (a secret ID/ARN,
+   or comma-separated list) + `AWS_REGION`. The entrypoint fetches it at startup
+   (using the `aws` + `jq` already in the image) and exports each key. Auth uses
+   the container's **AWS role** — IRSA on EKS, the task role on ECS, the instance
+   role on EC2 — *never* static keys. Example secret value:
+   ```json
+   {"PARAMIFY_UPLOAD_API_TOKEN":"…","OKTA_API_TOKEN":"…","GITLAB_TOKEN_1":"…"}
+   ```
+   ```bash
+   PARAMIFY_SECRETS_ID=paramify/fetchers/beta
+   AWS_REGION=us-east-1
+   ```
+   The role needs `secretsmanager:GetSecretValue` on that secret. (The same role
+   also serves as the AWS *fetchers'* identity — they don't use SM, they use the
+   role directly via `auth.passthrough_env`.)
+
+2. **Orchestrator-native injection (cleaner on ECS/EKS).** Skip the entrypoint
+   fetch and let the platform map SM → env vars: on **ECS**, the task definition's
+   `secrets:` field (SM ARN → env var); on **EKS**, the External Secrets Operator
+   or Secrets Store CSI driver (SM → a K8s Secret → `envFrom`). No app change.
+
+3. **Plain values in `deploy/.env`** — fine for local dev; not for production.
+
+> Caveats for the long-running `scheduler`: SM is read once at container start, so
+> rotated secrets need a restart; and the cron env-snapshot writes secrets to a
+> file inside the container (`/tmp`). Both are reasons to prefer option 2 +
+> CronJobs for production.
+
 ## 2. Build
 
 ```bash

@@ -12,6 +12,34 @@ cd /app
 # refuses to send the bearer token over cleartext to a non-loopback host).
 export PARAMIFY_API_BASE_URL="${PARAMIFY_API_BASE_URL:-https://stage.paramify.com/api/v0}"
 
+# --- Optional: hydrate env from AWS Secrets Manager (source-agnostic) ---------
+# Set PARAMIFY_SECRETS_ID to one secret ID/ARN (or a comma-separated list), each
+# holding a JSON object of VAR->value, e.g.
+#   {"OKTA_API_TOKEN":"...","GITLAB_TOKEN_1":"...","PARAMIFY_UPLOAD_API_TOKEN":"..."}
+# Inert unless set. Auth uses the container's AWS role (IRSA / ECS task role /
+# EC2 instance role) — never static keys; requires AWS_REGION. Uses the aws + jq
+# already in the image. (On ECS/EKS, prefer the orchestrator's native secret
+# injection over this — see deploy/README.md.)
+if [ -n "${PARAMIFY_SECRETS_ID:-}" ]; then
+  IFS=',' read -ra _sids <<< "$PARAMIFY_SECRETS_ID"
+  for _sid in "${_sids[@]}"; do
+    _sid="$(echo "$_sid" | xargs)"        # trim surrounding whitespace
+    [ -z "$_sid" ] && continue
+    echo "[entrypoint] loading secrets from AWS Secrets Manager: $_sid"
+    if ! _json="$(aws secretsmanager get-secret-value --secret-id "$_sid" --query SecretString --output text)"; then
+      echo "[entrypoint] ERROR: cannot read secret '$_sid' (check the container's AWS role + AWS_REGION)" >&2
+      exit 1
+    fi
+    # @sh shell-quotes each value so it survives spaces/quotes safely.
+    if ! _exports="$(printf '%s' "$_json" | jq -r 'to_entries[] | "export \(.key)=\(.value|@sh)"')"; then
+      echo "[entrypoint] ERROR: secret '$_sid' must be a flat JSON object of key/value pairs" >&2
+      exit 1
+    fi
+    eval "$_exports"
+  done
+  unset _sids _sid _json _exports
+fi
+
 case "${1:-}" in
   scheduler)
     echo "[entrypoint] starting cron scheduler (times are UTC inside the container)"

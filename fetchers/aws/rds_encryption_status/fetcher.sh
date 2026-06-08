@@ -6,7 +6,7 @@
 # encryption status. Aggregates a coverage percentage.
 #
 # Output: $EVIDENCE_DIR/aws_rds_encryption_status.json
-# Required env: AWS_PROFILE, AWS_DEFAULT_REGION
+# Optional env (else the AWS CLI ambient identity/region): AWS_PROFILE, AWS_DEFAULT_REGION
 # Required tools: aws, jq
 
 set -o pipefail
@@ -16,18 +16,14 @@ set -o pipefail
 OUTPUT_DIR="${EVIDENCE_DIR:-./evidence}"
 mkdir -p "$OUTPUT_DIR"
 
-if [ -z "${AWS_PROFILE:-}" ]; then
-    echo "ERROR aws_rds_encryption_status: AWS_PROFILE is not set" >&2; exit 1
-fi
-if [ -z "${AWS_DEFAULT_REGION:-}" ]; then
-    echo "ERROR aws_rds_encryption_status: AWS_DEFAULT_REGION is not set" >&2; exit 1
-fi
-
-PROFILE="$AWS_PROFILE"
-REGION="$AWS_DEFAULT_REGION"
+# Identity/region come from the AWS CLI credential chain. A manifest target may
+# set AWS_PROFILE/AWS_DEFAULT_REGION (multi-account / multi-region fanout); when
+# unset, the CLI uses the ambient identity/region. The helper sets PROFILE/REGION
+# (for metadata) and provides aws_target_id (for the output filename).
+source "$(dirname "$0")/../_shared/aws.sh"
 
 # Per-target output filename (profile+region) so multi-target runs don't overwrite.
-_TARGET_ID=$(printf '%s_%s' "$PROFILE" "$REGION" | tr -c 'A-Za-z0-9._-' '_')
+_TARGET_ID="$(aws_target_id "$REGION")"
 OUTPUT_JSON="$OUTPUT_DIR/aws_rds_encryption_status_${_TARGET_ID}.json"
 _FAILURE_LOG="$(mktemp -t aws_rds_encryption_status_fail.XXXXXX)"
 trap 'rm -f "$_FAILURE_LOG"' EXIT
@@ -35,7 +31,7 @@ trap 'rm -f "$_FAILURE_LOG"' EXIT
 log_info() { printf '%s INFO aws_rds_encryption_status %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 log_error() { printf '%s ERROR aws_rds_encryption_status %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 
-CALLER_IDENTITY=$(aws sts get-caller-identity --profile "$PROFILE" --output json 2>/dev/null)
+CALLER_IDENTITY=$(aws sts get-caller-identity --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws sts get-caller-identity failed" >> "$_FAILURE_LOG"
     CALLER_IDENTITY='{"Account":"unknown","Arn":"unknown"}'
@@ -49,7 +45,7 @@ encrypted_databases=0
 rds_results=()
 aurora_results=()
 
-instances=$(aws rds describe-db-instances --profile "$PROFILE" --region "$REGION" --query "DBInstances[*].DBInstanceIdentifier" --output text 2>/dev/null)
+instances=$(aws rds describe-db-instances --query "DBInstances[*].DBInstanceIdentifier" --output text 2>/dev/null)
 inst_list_exit=$?
 if [ $inst_list_exit -ne 0 ]; then
     echo "aws rds describe-db-instances (list) failed (exit=$inst_list_exit)" >> "$_FAILURE_LOG"
@@ -57,7 +53,7 @@ if [ $inst_list_exit -ne 0 ]; then
 else
     for instance in $instances; do
         total_databases=$((total_databases + 1))
-        instance_details=$(aws rds describe-db-instances --db-instance-identifier "$instance" --profile "$PROFILE" --region "$REGION" 2>/dev/null)
+        instance_details=$(aws rds describe-db-instances --db-instance-identifier "$instance" 2>/dev/null)
         if [ $? -ne 0 ]; then
             echo "aws rds describe-db-instances ($instance) failed" >> "$_FAILURE_LOG"
             continue
@@ -73,7 +69,7 @@ else
     done
 fi
 
-clusters=$(aws rds describe-db-clusters --profile "$PROFILE" --region "$REGION" --query "DBClusters[*].DBClusterIdentifier" --output text 2>/dev/null)
+clusters=$(aws rds describe-db-clusters --query "DBClusters[*].DBClusterIdentifier" --output text 2>/dev/null)
 clus_list_exit=$?
 if [ $clus_list_exit -ne 0 ]; then
     echo "aws rds describe-db-clusters (list) failed (exit=$clus_list_exit)" >> "$_FAILURE_LOG"
@@ -81,7 +77,7 @@ if [ $clus_list_exit -ne 0 ]; then
 else
     for cluster in $clusters; do
         total_databases=$((total_databases + 1))
-        cluster_details=$(aws rds describe-db-clusters --db-cluster-identifier "$cluster" --profile "$PROFILE" --region "$REGION" 2>/dev/null)
+        cluster_details=$(aws rds describe-db-clusters --db-cluster-identifier "$cluster" 2>/dev/null)
         if [ $? -ne 0 ]; then
             echo "aws rds describe-db-clusters ($cluster) failed" >> "$_FAILURE_LOG"
             continue

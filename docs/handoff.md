@@ -4,7 +4,7 @@
 
 This doc captures where the port work is at right now so the next session can pick up without re-reading prior chat history.
 
-For project overview see [`design.md`](design.md). For porting procedure see [`porting_playbook.md`](porting_playbook.md). For the strict imperative recipe AI agents should follow see [`ai_port_recipe.md`](ai_port_recipe.md).
+For project overview see [`design.md`](design.md). For porting procedure (the per-fetcher port steps AI agents should follow) see [`porting_playbook.md`](porting_playbook.md).
 
 ---
 
@@ -33,7 +33,7 @@ For project overview see [`design.md`](design.md). For porting procedure see [`p
 - **Evidence envelope (landed 2026-05-28)** — the runner wraps each JSON output file in `{schema_version, metadata, payload}` after the invocation (`framework/envelope.py`, validated by `schemas/envelope_schema.json`). Fetchers still write raw payloads; the runner adds attribution (name, version, category, run_id, target, collected_at, status, exit_code, error tail). Idempotent (won't double-wrap), per-target metadata for fanout, `_run_metadata.json` not wrapped. This is the prerequisite for the uploader. See `docs/envelope_design.md`.
 - **Evidence uploader `paramify_evidence` (BUILT)** — `uploaders/paramify_evidence/uploader.py` (+ `uploader.yaml`, README, `examples/upload.yaml`). Reads a run dir of enveloped evidence, applies customer `reference_id` overrides, **get-or-creates** the evidence set by `reference_id` (`GET /evidence?referenceId=`, `POST /evidence`) via Paramify REST v0, and attaches each file as a multipart artifact (`POST /evidence/{id}/artifacts/upload`). Idempotent per run (exact-token `run_id` dedup), `--dry-run`, `--config`, per-file failure isolation, `upload_log.json`, https-only token guard (`PARAMIFY_UPLOAD_API_TOKEN`, optional `PARAMIFY_API_BASE_URL`/`--config base_url`), non-zero exit on real errors. Completes the tool→evidence→Paramify chain. Reviewed by a multi-agent adversarial workflow (9 findings, all fixed; mock-tested). Not yet run against a live Paramify tenant. Open: confirm Paramify ingestion accepts the enveloped file vs bare payload (toggle: `artifact_payload`).
 - **Issues uploader `paramify_issues` — EMPTY STUB (NOT built)** — `uploaders/paramify_issues/` has zero-byte `uploader.py`/`uploader.yaml`. This is the assessment-intake variant that Wiz needs; it blocks Wiz.
-- **Evidence-set identity in `fetcher.yaml` + envelope (landed 2026-05-28)** — optional `evidence_set` block (`reference_id`, `name`, `instructions`, `description`-fallback) in `fetcher_schema.json` / `contract.py` / `config_loader.py`; the runner carries it into `metadata.evidence_set` so evidence files are self-describing for upload. 1 fetcher = 1 evidence set; customer overrides `reference_id` per program in the (now-built) `paramify_evidence` uploader config. **Backfilled onto all 56 fetchers** (2026-05-28): 53 from the upstream catalog (id/name/instructions), 3 generated for fetchers absent from the catalog (`aws_rds_tls_configuration`→EVD-RDS-TLS-CONFIG, `okta_authenticators`→EVD-OKTA-AUTHENTICATORS, `rippling_devices`→EVD-RIPPLING-DEVICES) — these 3 have **no `instructions` yet** (worth filling). All referenceIds unique. See `docs/uploader_design.md`.
+- **Evidence-set identity in `fetcher.yaml` + envelope (landed 2026-05-28)** — optional `evidence_set` block (`reference_id`, `name`, `instructions`, `description`-fallback) in `fetcher_schema.json` / `contract.py` / `config_loader.py`; the runner carries it into `metadata.evidence_set` so evidence files are self-describing for upload. 1 fetcher = 1 evidence set; customer overrides `reference_id` per program in the (now-built) `paramify_evidence` uploader config. **Backfilled onto all 58 fetchers** (2026-05-28): the bulk from the upstream catalog (id/name/instructions), a few generated for fetchers absent from the catalog (`aws_rds_tls_configuration`→EVD-RDS-TLS-CONFIG, `okta_authenticators`→EVD-OKTA-AUTHENTICATORS, `rippling_devices`→EVD-RIPPLING-DEVICES) — these 3 have **no `instructions` yet** (worth filling). All referenceIds unique. See `docs/envelope_design.md`.
 
 **58 fetchers across 8 categories:**
 
@@ -48,7 +48,7 @@ For project overview see [`design.md`](design.md). For porting procedure see [`p
 | AWS | 30 | All bash; all 30 are fanout (region/profile) — see AWS section below |
 | Checkov | 2 | Bash IaC scanners (terraform + kubernetes); self-acquire source via git clone, run the `checkov` CLI |
 
-**Docs landed:** root `README.md` (entry point for engineers adding fetchers), `design.md`, `porting_playbook.md`, `ai_port_recipe.md`, `fetcher_contract.md`, `run_manifest_reference.md`, `authoring_a_fetcher.md`, `config_injection_design.md`, `fetcher_purity_audit.md`, `envelope_design.md` (implemented, runner-wraps approach), `uploader_design.md` (evidence-set identity in fetcher.yaml, get-or-create, control linkage stays manual — `paramify_evidence` now built per this design).
+**Docs landed:** root `README.md` (entry point for engineers adding fetchers), `design.md`, `porting_playbook.md`, `fetcher_contract.md`, `run_manifest_reference.md`, `authoring_a_fetcher.md`, `config_injection_design.md`, `envelope_design.md` (implemented, runner-wraps approach; also covers evidence-set identity in fetcher.yaml, get-or-create, control linkage stays manual — `paramify_evidence` now built per this design).
 
 ---
 
@@ -84,7 +84,7 @@ Every AWS fetcher.sh follows this skeleton. The middle (data collection) section
 #!/bin/bash
 # <description>
 # Output: $EVIDENCE_DIR/aws_<short>.json
-# Required env: AWS_PROFILE, AWS_DEFAULT_REGION
+# Optional env (else ambient identity/region): AWS_PROFILE, AWS_DEFAULT_REGION
 # Required tools: aws, jq
 
 set -o pipefail
@@ -146,12 +146,14 @@ log_info "Evidence saved to $OUTPUT_JSON"
 
 All 30 AWS fetchers are **fanout** — one `(region, profile)` target per invocation,
 own output file (`aws_<short>_<profile>_<region>.json`), isolated failures.
-`region`+`profile` are `target_schema` fields (both required), not secrets, so a
+`region`+`profile` are `target_schema` fields (both **optional**), not secrets, so a
 manifest supplies `targets:`, not `secrets:`. **Breaking for AWS manifests** —
 the old `secrets: {aws_profile, aws_region}` shape no longer validates; use
-`targets: [{region, profile}]`. (`profile` is required today; making it optional
-for ambient/IRSA-only auth is a deferred follow-up — it needs the per-call
-`--profile` to become conditional across the scripts.)
+`targets: [{region, profile}]`. Omit `profile`/`region` — or omit `targets[]`
+entirely — and the fetcher collects the **ambient** account/region via the AWS CLI
+credential chain ("collect where deployed"); set `profile:`/`region:` per target
+for multi-account / multi-region assume-role fanout, where a target's values
+override the ambient defaults.
 
 ```yaml
 name: aws_<short>
@@ -173,11 +175,11 @@ output:
 target_schema:
   region:
     type: string
-    required: true
+    required: false
     env: AWS_DEFAULT_REGION
   profile:
     type: string
-    required: true
+    required: false
     env: AWS_PROFILE
 
 secrets: []
@@ -185,12 +187,12 @@ secrets: []
 
 **Global vs regional (audited + reshaped 2026-05-29):** 5 AWS fetchers query
 account-GLOBAL services and are now **profile-only fanout** — `target_schema`
-has `profile` required + `region` optional, the `.sh` defaults region to
+has `profile` + `region` both optional, the `.sh` defaults region to
 us-east-1, and the output is keyed on profile (`aws_<short>_<profile>.json`), so
 no misleading per-region duplication: **aws_iam_roles, aws_iam_policies,
 aws_iam_users_groups, aws_route53_high_availability, aws_s3_encryption_status**
 (list one target per account, no region). The other 22 are genuinely regional
-(region+profile, both required). 3 are
+(region+profile, both optional — omit them to collect ambient). 3 are
 **mixed-scope** (a global half duplicated per region) and would benefit from
 splitting global from regional collection — **deferred code work**:
 `aws_backup_validation` (S3 half), `aws_component_ssl_enforcement_status` (S3
@@ -228,7 +230,7 @@ For pulling 5 at a time, use the batched pattern from prior sessions (output to 
 
 ## Remaining work — categories with NO ported fetchers yet
 
-`azure`, `ssllabs`, `wiz` exist **only as `_categories/<name>.yaml` stubs** — there are no fetcher dirs under `fetchers/<cat>/` for any of them (in particular, **no azure fetchers exist in this tree**). The Rippling comparators are also unported. Each is blocked or constrained by framework work, or simply not started:
+`azure`, `ssllabs`, `wiz` exist **only as `_categories/<name>.yaml` stubs** — there are no ported fetchers for any of them (in particular, **azure has only a `_categories` stub plus an empty `fetchers/azure/` placeholder dir — no ported fetchers**). The Rippling comparators are also unported. Each is blocked or constrained by framework work, or simply not started:
 
 | Category | Scripts | Blocked on |
 |---|---|---|
@@ -310,7 +312,7 @@ Discrete bugs found and **fixed**:
 - No subprocess timeout (hung fetcher stalled the run) → per-invocation timeout.
 - Failures undiagnosable from `_run_metadata.json` → `stderr_tail` on failure.
 
-Known data-purity smells (flagged, **not** fixed — port-as-is, see `fetcher_purity_audit.md`):
+Known data-purity smells (flagged, **not** fixed — port-as-is):
 - `okta_authenticators` hardcoded `"status": "PASS"` in the evidence body.
 - `gitlab_merge_request_summary` `compliance_summary` block bakes in an 80% threshold + findings/recommendation strings.
 - KnowBe4 training fetchers hardcode customer group/campaign names (candidates for `config_schema` now that injection exists).
@@ -335,7 +337,7 @@ Still open (deferred by design, not bugs): `paramify_issues` uploader + comparat
 
 ## Open contract questions (deferred, surfaced by the audit)
 
-These came up in [`fetcher_purity_audit.md`](fetcher_purity_audit.md) and remain unresolved:
+These came up in the foundation review (above) and remain unresolved:
 
 - Is `status: "PASS" | "FAIL"` a fetcher concern or a Paramify-side concern? Currently inconsistent (`okta_authenticators` has a hardcoded `"PASS"` that the audit flagged).
 - Are compliance thresholds (e.g. 80% MR approval rate in `gitlab_merge_request_summary`) customer-configurable, or Paramify-side?
@@ -362,7 +364,7 @@ What's left is new categories and the framework pieces that gate them (see
 Pick a framework piece, then the script. All work routes through `framework.api`
 (the human CLI, the `--json` AI CLI, and the `paramify tui` all
 share it — change behavior there, not in a front-end). For a fresh fetcher/port,
-follow [`docs/ai_port_recipe.md`](ai_port_recipe.md) and verify with
+follow [`docs/porting_playbook.md`](porting_playbook.md) and verify with
 `paramify list`, `bash -n`, and a fake-cred smoke (expect exit 1).
 The 3 fetchers without `evidence_set.instructions` (`aws_rds_tls_configuration`,
 `okta_authenticators`, `rippling_devices`) are also worth filling.

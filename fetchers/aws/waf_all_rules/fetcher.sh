@@ -1,7 +1,7 @@
 #!/bin/bash
 # Lists all WAFv2 REGIONAL Web ACLs and captures every rule in each WebACL (full rule objects, no filtering).
 # Output: $EVIDENCE_DIR/aws_waf_all_rules.json
-# Required env: AWS_PROFILE, AWS_DEFAULT_REGION
+# Optional env (else the AWS CLI ambient identity/region): AWS_PROFILE, AWS_DEFAULT_REGION
 # Required tools: aws, jq
 
 set -o pipefail
@@ -11,14 +11,14 @@ set -o pipefail
 OUTPUT_DIR="${EVIDENCE_DIR:-./evidence}"
 mkdir -p "$OUTPUT_DIR"
 
-if [ -z "${AWS_PROFILE:-}" ]; then echo "ERROR aws_waf_all_rules: AWS_PROFILE is not set" >&2; exit 1; fi
-if [ -z "${AWS_DEFAULT_REGION:-}" ]; then echo "ERROR aws_waf_all_rules: AWS_DEFAULT_REGION is not set" >&2; exit 1; fi
-
-PROFILE="$AWS_PROFILE"
-REGION="$AWS_DEFAULT_REGION"
+# Identity/region come from the AWS CLI credential chain. A manifest target may
+# set AWS_PROFILE/AWS_DEFAULT_REGION (multi-account / multi-region fanout); when
+# unset, the CLI uses the ambient identity/region. The helper sets PROFILE/REGION
+# (for metadata) and provides aws_target_id (for the output filename).
+source "$(dirname "$0")/../_shared/aws.sh"
 
 # Per-target output filename (profile+region) so multi-target runs don't overwrite.
-_TARGET_ID=$(printf '%s_%s' "$PROFILE" "$REGION" | tr -c 'A-Za-z0-9._-' '_')
+_TARGET_ID="$(aws_target_id "$REGION")"
 OUTPUT_JSON="$OUTPUT_DIR/aws_waf_all_rules_${_TARGET_ID}.json"
 _FETCHER_TMP_JSON="$(mktemp -t aws_waf_all_rules.XXXXXX.json)"
 _FAILURE_LOG="$(mktemp -t aws_waf_all_rules_fail.XXXXXX)"
@@ -27,7 +27,7 @@ trap 'rm -f "$_FETCHER_TMP_JSON" "$_FAILURE_LOG"' EXIT
 log_info() { printf '%s INFO aws_waf_all_rules %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 log_error() { printf '%s ERROR aws_waf_all_rules %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 
-CALLER_IDENTITY=$(aws sts get-caller-identity --profile "$PROFILE" --output json 2>/dev/null)
+CALLER_IDENTITY=$(aws sts get-caller-identity --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws sts get-caller-identity failed" >> "$_FAILURE_LOG"
     CALLER_IDENTITY='{"Account":"unknown","Arn":"unknown"}'
@@ -45,7 +45,7 @@ jq -n \
 # --- per-script data collection (ported from upstream) ---
 
 # List all WAFv2 REGIONAL Web ACLs in the region
-web_acls=$(aws wafv2 list-web-acls --scope REGIONAL --region "$REGION" --profile "$PROFILE" --query 'WebACLs[*].[Id, Name]' --output text 2>/dev/null)
+web_acls=$(aws wafv2 list-web-acls --scope REGIONAL --query 'WebACLs[*].[Id, Name]' --output text 2>/dev/null)
 ec=$?
 if [ $ec -ne 0 ]; then
     echo "aws wafv2 list-web-acls failed (exit=$ec)" >> "$_FAILURE_LOG"
@@ -71,7 +71,7 @@ if [ -n "$web_acls" ]; then
             continue
         fi
 
-        acl_details=$(aws wafv2 get-web-acl --scope REGIONAL --region "$REGION" --profile "$PROFILE" --name "$acl_name" --id "$acl_id" --output json 2>/dev/null)
+        acl_details=$(aws wafv2 get-web-acl --scope REGIONAL --name "$acl_name" --id "$acl_id" --output json 2>/dev/null)
         ec=$?
         if [ $ec -ne 0 ]; then
             echo "aws wafv2 get-web-acl failed for $acl_name ($acl_id) (exit=$ec)" >> "$_FAILURE_LOG"

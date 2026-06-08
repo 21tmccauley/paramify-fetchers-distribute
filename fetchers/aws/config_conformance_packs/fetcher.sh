@@ -4,7 +4,7 @@
 # not-applicable rule counts. Ships with Operational-Best-Practices-for-FedRAMP-Low.yaml
 # (resolved relative to this script's dir) as a reference conformance pack template.
 # Output: $EVIDENCE_DIR/aws_config_conformance_packs.json
-# Required env: AWS_PROFILE, AWS_DEFAULT_REGION
+# Optional env (else the AWS CLI ambient identity/region): AWS_PROFILE, AWS_DEFAULT_REGION
 # Required tools: aws, jq
 
 set -o pipefail
@@ -17,14 +17,14 @@ FEDRAMP_LOW_TEMPLATE="$SCRIPT_DIR/Operational-Best-Practices-for-FedRAMP-Low.yam
 OUTPUT_DIR="${EVIDENCE_DIR:-./evidence}"
 mkdir -p "$OUTPUT_DIR"
 
-if [ -z "${AWS_PROFILE:-}" ]; then echo "ERROR aws_config_conformance_packs: AWS_PROFILE is not set" >&2; exit 1; fi
-if [ -z "${AWS_DEFAULT_REGION:-}" ]; then echo "ERROR aws_config_conformance_packs: AWS_DEFAULT_REGION is not set" >&2; exit 1; fi
-
-PROFILE="$AWS_PROFILE"
-REGION="$AWS_DEFAULT_REGION"
+# Identity/region come from the AWS CLI credential chain. A manifest target may
+# set AWS_PROFILE/AWS_DEFAULT_REGION (multi-account / multi-region fanout); when
+# unset, the CLI uses the ambient identity/region. The helper sets PROFILE/REGION
+# (for metadata) and provides aws_target_id (for the output filename).
+source "$(dirname "$0")/../_shared/aws.sh"
 
 # Per-target output filename (profile+region) so multi-target runs don't overwrite.
-_TARGET_ID=$(printf '%s_%s' "$PROFILE" "$REGION" | tr -c 'A-Za-z0-9._-' '_')
+_TARGET_ID="$(aws_target_id "$REGION")"
 OUTPUT_JSON="$OUTPUT_DIR/aws_config_conformance_packs_${_TARGET_ID}.json"
 _FETCHER_TMP_JSON="$(mktemp -t aws_config_conformance_packs.XXXXXX.json)"
 _FAILURE_LOG="$(mktemp -t aws_config_conformance_packs_fail.XXXXXX)"
@@ -33,7 +33,7 @@ trap 'rm -f "$_FETCHER_TMP_JSON" "$_FAILURE_LOG"' EXIT
 log_info() { printf '%s INFO aws_config_conformance_packs %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 log_error() { printf '%s ERROR aws_config_conformance_packs %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 
-CALLER_IDENTITY=$(aws sts get-caller-identity --profile "$PROFILE" --output json 2>/dev/null)
+CALLER_IDENTITY=$(aws sts get-caller-identity --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws sts get-caller-identity failed" >> "$_FAILURE_LOG"
     CALLER_IDENTITY='{"Account":"unknown","Arn":"unknown"}'
@@ -54,8 +54,8 @@ jq -n \
 
 log_info "Fetching conformance packs..."
 conformance_packs=$(aws configservice describe-conformance-packs \
-    --profile "$PROFILE" \
-    --region "$REGION" \
+    \
+    \
     --query "ConformancePackDetails[].ConformancePackName" \
     --output json \
     --no-cli-pager 2>/dev/null)
@@ -74,8 +74,8 @@ else
     for pack in $(echo "$conformance_packs" | jq -r '.[]'); do
         log_info "Processing conformance pack: $pack"
         compliance_details=$(aws configservice get-conformance-pack-compliance-details \
-            --profile "$PROFILE" \
-            --region "$REGION" \
+            \
+            \
             --conformance-pack-name "$pack" \
             --output json \
             --no-cli-pager 2>/dev/null)
@@ -94,8 +94,8 @@ else
 
         while [ ! -z "$next_token" ]; do
             next_page=$(aws configservice get-conformance-pack-compliance-details \
-                --profile "$PROFILE" \
-                --region "$REGION" \
+                \
+                \
                 --conformance-pack-name "$pack" \
                 --next-token "$next_token" \
                 --output json \
@@ -125,8 +125,8 @@ else
 
         # Get status details
         status_details=$(aws configservice describe-conformance-pack-status \
-            --profile "$PROFILE" \
-            --region "$REGION" \
+            \
+            \
             --conformance-pack-names "$pack" \
             --query "ConformancePackStatusDetails[]" \
             --output json \
@@ -143,8 +143,8 @@ else
 
         # Get compliance summary
         compliance_summary=$(aws configservice get-conformance-pack-compliance-summary \
-            --profile "$PROFILE" \
-            --region "$REGION" \
+            \
+            \
             --conformance-pack-names "$pack" \
             --output json \
             --no-cli-pager 2>/dev/null)

@@ -73,7 +73,7 @@ evidence_set:
 
 If the fetcher should be invoked once per target (per AWS region+profile, per GitLab project, per K8s cluster, etc.), the runner expands the manifest's targets and invokes the fetcher once per target, setting each `target_schema.<field>.env` var for that invocation.
 
-**AWS-style fanout** is the most common shape. Every AWS fetcher fans out; the regional ones take a `region`/`profile` pair per invocation:
+**AWS-style fanout** is the most common shape. Every AWS fetcher fans out, but `region` and `profile` are OPTIONAL — omit them (or omit `targets[]` entirely) and the fetcher collects the ambient account/region via the AWS CLI credential chain ("collect where deployed"); set a `region`/`profile` pair per target to override those ambient defaults for multi-account / multi-region assume-role fanout:
 
 ```yaml
 supports_targets: true
@@ -81,14 +81,14 @@ supports_targets: true
 target_schema:
   region:
     type: string
-    required: true
+    required: false
     env: AWS_DEFAULT_REGION    # runner sets this env var per target
-    description: AWS region to collect from.
+    description: AWS region to collect from. Optional — omit to use the ambient region from the AWS CLI credential chain.
   profile:
     type: string
-    required: true
+    required: false
     env: AWS_PROFILE
-    description: AWS named profile (credentials resolved from ~/.aws / SSO).
+    description: AWS named profile (credentials resolved from ~/.aws / SSO). Optional — omit to use the ambient credentials; set per target for multi-account assume-role fanout.
 
 output:
   type: json
@@ -98,7 +98,7 @@ output:
 secrets: []                       # AWS creds come from the named profile, not a declared secret
 ```
 
-Global AWS fetchers (IAM, S3 encryption, Route 53) make `region` optional (default `us-east-1`) so they fan out per-profile only.
+Global AWS fetchers (IAM, S3 encryption, Route 53) ignore `region` and fan out per-profile only; omitting `profile` too falls back to the ambient credentials.
 
 For an API-token-based source like GitLab, the targets carry their own identifiers and a per-target secret:
 

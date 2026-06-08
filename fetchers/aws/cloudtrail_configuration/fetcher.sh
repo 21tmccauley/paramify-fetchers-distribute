@@ -1,7 +1,7 @@
 #!/bin/bash
 # Lists CloudTrail trails and captures per-trail configuration, logging status, and a summary.
 # Output: $EVIDENCE_DIR/aws_cloudtrail_configuration.json
-# Required env: AWS_PROFILE, AWS_DEFAULT_REGION
+# Optional env (else the AWS CLI ambient identity/region): AWS_PROFILE, AWS_DEFAULT_REGION
 # Required tools: aws, jq
 
 set -o pipefail
@@ -11,14 +11,14 @@ set -o pipefail
 OUTPUT_DIR="${EVIDENCE_DIR:-./evidence}"
 mkdir -p "$OUTPUT_DIR"
 
-if [ -z "${AWS_PROFILE:-}" ]; then echo "ERROR aws_cloudtrail_configuration: AWS_PROFILE is not set" >&2; exit 1; fi
-if [ -z "${AWS_DEFAULT_REGION:-}" ]; then echo "ERROR aws_cloudtrail_configuration: AWS_DEFAULT_REGION is not set" >&2; exit 1; fi
-
-PROFILE="$AWS_PROFILE"
-REGION="$AWS_DEFAULT_REGION"
+# Identity/region come from the AWS CLI credential chain. A manifest target may
+# set AWS_PROFILE/AWS_DEFAULT_REGION (multi-account / multi-region fanout); when
+# unset, the CLI uses the ambient identity/region. The helper sets PROFILE/REGION
+# (for metadata) and provides aws_target_id (for the output filename).
+source "$(dirname "$0")/../_shared/aws.sh"
 
 # Per-target output filename (profile+region) so multi-target runs don't overwrite.
-_TARGET_ID=$(printf '%s_%s' "$PROFILE" "$REGION" | tr -c 'A-Za-z0-9._-' '_')
+_TARGET_ID="$(aws_target_id "$REGION")"
 OUTPUT_JSON="$OUTPUT_DIR/aws_cloudtrail_configuration_${_TARGET_ID}.json"
 _FETCHER_TMP_JSON="$(mktemp -t aws_cloudtrail_configuration.XXXXXX.json)"
 _FAILURE_LOG="$(mktemp -t aws_cloudtrail_configuration_fail.XXXXXX)"
@@ -27,7 +27,7 @@ trap 'rm -f "$_FETCHER_TMP_JSON" "$_FAILURE_LOG"' EXIT
 log_info() { printf '%s INFO aws_cloudtrail_configuration %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 log_error() { printf '%s ERROR aws_cloudtrail_configuration %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 
-CALLER_IDENTITY=$(aws sts get-caller-identity --profile "$PROFILE" --output json 2>/dev/null)
+CALLER_IDENTITY=$(aws sts get-caller-identity --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws sts get-caller-identity failed" >> "$_FAILURE_LOG"
     CALLER_IDENTITY='{"Account":"unknown","Arn":"unknown"}'
@@ -45,7 +45,7 @@ jq -n \
 # --- per-script data collection (ported from upstream) ---
 
 # 1. Get all trails
-trails=$(aws cloudtrail list-trails --profile "$PROFILE" --region "$REGION" --query 'Trails[*].[Name,TrailARN]' --output json 2>/dev/null)
+trails=$(aws cloudtrail list-trails --query 'Trails[*].[Name,TrailARN]' --output json 2>/dev/null)
 ec=$?
 if [ $ec -ne 0 ]; then
     echo "aws cloudtrail list-trails failed (exit=$ec)" >> "$_FAILURE_LOG"
@@ -69,7 +69,7 @@ if [ "$(echo "$trails" | jq 'length')" -gt 0 ]; then
         trail_arn=$(echo "$trail" | jq -r '.[1]')
 
         # Get trail details
-        trail_details=$(aws cloudtrail get-trail --profile "$PROFILE" --region "$REGION" --name "$trail_name" --output json 2>/dev/null)
+        trail_details=$(aws cloudtrail get-trail --name "$trail_name" --output json 2>/dev/null)
         ec=$?
         if [ $ec -ne 0 ] || [ -z "$trail_details" ] || ! echo "$trail_details" | jq . >/dev/null 2>&1; then
             echo "aws cloudtrail get-trail failed for $trail_name (exit=$ec)" >> "$_FAILURE_LOG"
@@ -77,7 +77,7 @@ if [ "$(echo "$trails" | jq 'length')" -gt 0 ]; then
         fi
 
         # Get trail status
-        trail_status=$(aws cloudtrail get-trail-status --profile "$PROFILE" --region "$REGION" --name "$trail_name" --output json 2>/dev/null)
+        trail_status=$(aws cloudtrail get-trail-status --name "$trail_name" --output json 2>/dev/null)
         ec=$?
         if [ $ec -ne 0 ] || [ -z "$trail_status" ] || ! echo "$trail_status" | jq . >/dev/null 2>&1; then
             echo "aws cloudtrail get-trail-status failed for $trail_name (exit=$ec)" >> "$_FAILURE_LOG"

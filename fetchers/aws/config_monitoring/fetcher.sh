@@ -2,7 +2,7 @@
 # Checks AWS Config setup (configuration recorders, recorder status, delivery
 # channels) and summarizes recording/health state.
 # Output: $EVIDENCE_DIR/aws_config_monitoring.json
-# Required env: AWS_PROFILE, AWS_DEFAULT_REGION
+# Optional env (else the AWS CLI ambient identity/region): AWS_PROFILE, AWS_DEFAULT_REGION
 # Required tools: aws, jq
 
 set -o pipefail
@@ -12,14 +12,14 @@ set -o pipefail
 OUTPUT_DIR="${EVIDENCE_DIR:-./evidence}"
 mkdir -p "$OUTPUT_DIR"
 
-if [ -z "${AWS_PROFILE:-}" ]; then echo "ERROR aws_config_monitoring: AWS_PROFILE is not set" >&2; exit 1; fi
-if [ -z "${AWS_DEFAULT_REGION:-}" ]; then echo "ERROR aws_config_monitoring: AWS_DEFAULT_REGION is not set" >&2; exit 1; fi
-
-PROFILE="$AWS_PROFILE"
-REGION="$AWS_DEFAULT_REGION"
+# Identity/region come from the AWS CLI credential chain. A manifest target may
+# set AWS_PROFILE/AWS_DEFAULT_REGION (multi-account / multi-region fanout); when
+# unset, the CLI uses the ambient identity/region. The helper sets PROFILE/REGION
+# (for metadata) and provides aws_target_id (for the output filename).
+source "$(dirname "$0")/../_shared/aws.sh"
 
 # Per-target output filename (profile+region) so multi-target runs don't overwrite.
-_TARGET_ID=$(printf '%s_%s' "$PROFILE" "$REGION" | tr -c 'A-Za-z0-9._-' '_')
+_TARGET_ID="$(aws_target_id "$REGION")"
 OUTPUT_JSON="$OUTPUT_DIR/aws_config_monitoring_${_TARGET_ID}.json"
 _FETCHER_TMP_JSON="$(mktemp -t aws_config_monitoring.XXXXXX.json)"
 _FAILURE_LOG="$(mktemp -t aws_config_monitoring_fail.XXXXXX)"
@@ -28,7 +28,7 @@ trap 'rm -f "$_FETCHER_TMP_JSON" "$_FAILURE_LOG"' EXIT
 log_info() { printf '%s INFO aws_config_monitoring %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 log_error() { printf '%s ERROR aws_config_monitoring %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 
-CALLER_IDENTITY=$(aws sts get-caller-identity --profile "$PROFILE" --output json 2>/dev/null)
+CALLER_IDENTITY=$(aws sts get-caller-identity --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws sts get-caller-identity failed" >> "$_FAILURE_LOG"
     CALLER_IDENTITY='{"Account":"unknown","Arn":"unknown"}'
@@ -49,19 +49,19 @@ log_info "Checking AWS Config setup"
 
 # Get configuration recorder status. Empty arrays are valid evidence (Config
 # not set up in this region) -> not logged as failures.
-recorder_status=$(aws configservice describe-configuration-recorder-status --profile "$PROFILE" --region "$REGION" --query 'ConfigurationRecordersStatus[*]' --output json 2>/dev/null)
+recorder_status=$(aws configservice describe-configuration-recorder-status --query 'ConfigurationRecordersStatus[*]' --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws configservice describe-configuration-recorder-status failed" >> "$_FAILURE_LOG"
     recorder_status='[]'
 fi
 
-config_recorders=$(aws configservice describe-configuration-recorders --profile "$PROFILE" --region "$REGION" --query 'ConfigurationRecorders[*]' --output json 2>/dev/null)
+config_recorders=$(aws configservice describe-configuration-recorders --query 'ConfigurationRecorders[*]' --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws configservice describe-configuration-recorders failed" >> "$_FAILURE_LOG"
     config_recorders='[]'
 fi
 
-delivery_channels=$(aws configservice describe-delivery-channels --profile "$PROFILE" --region "$REGION" --query 'DeliveryChannels[*]' --output json 2>/dev/null)
+delivery_channels=$(aws configservice describe-delivery-channels --query 'DeliveryChannels[*]' --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws configservice describe-delivery-channels failed" >> "$_FAILURE_LOG"
     delivery_channels='[]'

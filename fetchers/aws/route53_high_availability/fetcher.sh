@@ -5,7 +5,7 @@
 # Lists Route 53 health checks and current status (DNS failover evidence).
 #
 # Output: $EVIDENCE_DIR/aws_route53_high_availability.json
-# Required env: AWS_PROFILE, AWS_DEFAULT_REGION
+# Optional env (else the AWS CLI ambient identity/region): AWS_PROFILE, AWS_DEFAULT_REGION
 # Required tools: aws, jq
 
 set -o pipefail
@@ -15,16 +15,16 @@ set -o pipefail
 OUTPUT_DIR="${EVIDENCE_DIR:-./evidence}"
 mkdir -p "$OUTPUT_DIR"
 
-if [ -z "${AWS_PROFILE:-}" ]; then
-    echo "ERROR aws_route53_high_availability: AWS_PROFILE is not set" >&2
-    exit 1
-fi
-
-PROFILE="$AWS_PROFILE"
-REGION="${AWS_DEFAULT_REGION:-us-east-1}"
+# Identity/region come from the AWS CLI credential chain. A manifest target may
+# set AWS_PROFILE/AWS_DEFAULT_REGION (multi-account / multi-region fanout); when
+# unset, the CLI uses the ambient identity/region. The helper sets PROFILE/REGION
+# (for metadata) and provides aws_target_id (for the output filename).
+source "$(dirname "$0")/../_shared/aws.sh"
+REGION="${REGION:-us-east-1}"
+export AWS_DEFAULT_REGION="$REGION"
 
 # Per-account output filename (profile) — global service, region not part of identity.
-_TARGET_ID=$(printf '%s' "$PROFILE" | tr -c 'A-Za-z0-9._-' '_')
+_TARGET_ID="$(aws_target_id)"
 OUTPUT_JSON="$OUTPUT_DIR/aws_route53_high_availability_${_TARGET_ID}.json"
 _FETCHER_TMP_JSON="$(mktemp -t aws_route53_high_availability.XXXXXX.json)"
 _FAILURE_LOG="$(mktemp -t aws_route53_high_availability_fail.XXXXXX)"
@@ -33,7 +33,7 @@ trap 'rm -f "$_FETCHER_TMP_JSON" "$_FAILURE_LOG"' EXIT
 log_info() { printf '%s INFO aws_route53_high_availability %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 log_error() { printf '%s ERROR aws_route53_high_availability %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 
-CALLER_IDENTITY=$(aws sts get-caller-identity --profile "$PROFILE" --output json 2>/dev/null)
+CALLER_IDENTITY=$(aws sts get-caller-identity --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws sts get-caller-identity failed" >> "$_FAILURE_LOG"
     CALLER_IDENTITY='{"Account":"unknown","Arn":"unknown"}'
@@ -48,7 +48,7 @@ jq -n \
   '{"metadata": {"profile": $profile, "region": $region, "datetime": $datetime, "account_id": $account_id, "arn": $arn}, "results": []}' \
   > "$OUTPUT_JSON"
 
-health_checks=$(aws route53 list-health-checks --profile "$PROFILE" --region "$REGION" --query 'HealthChecks[*]' --output json 2>/dev/null)
+health_checks=$(aws route53 list-health-checks --query 'HealthChecks[*]' --output json 2>/dev/null)
 hc_exit=$?
 if [ $hc_exit -ne 0 ]; then
     echo "aws route53 list-health-checks failed (exit=$hc_exit)" >> "$_FAILURE_LOG"
@@ -57,7 +57,7 @@ else
     echo "$health_checks" | jq -c '.[]' | while read -r hc; do
         hc_id=$(echo "$hc" | jq -r '.Id')
 
-        hc_status=$(aws route53 get-health-check-status --profile "$PROFILE" --region "$REGION" --health-check-id "$hc_id" --query 'HealthCheckObservations[*]' --output json 2>/dev/null)
+        hc_status=$(aws route53 get-health-check-status --health-check-id "$hc_id" --query 'HealthCheckObservations[*]' --output json 2>/dev/null)
         status_exit=$?
         if [ $status_exit -ne 0 ]; then
             echo "aws route53 get-health-check-status ($hc_id) failed (exit=$status_exit)" >> "$_FAILURE_LOG"

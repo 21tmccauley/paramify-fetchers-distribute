@@ -4,7 +4,7 @@
 # AWS Backup (vaults and recovery points), with coverage summaries.
 # Honors BUCKETS_TO_INCLUDE (space-separated) to limit which S3 buckets are processed.
 # Output: $EVIDENCE_DIR/aws_backup_validation.json
-# Required env: AWS_PROFILE, AWS_DEFAULT_REGION
+# Optional env (else the AWS CLI ambient identity/region): AWS_PROFILE, AWS_DEFAULT_REGION
 # Optional env: BUCKETS_TO_INCLUDE
 # Required tools: aws, jq
 
@@ -15,14 +15,14 @@ set -o pipefail
 OUTPUT_DIR="${EVIDENCE_DIR:-./evidence}"
 mkdir -p "$OUTPUT_DIR"
 
-if [ -z "${AWS_PROFILE:-}" ]; then echo "ERROR aws_backup_validation: AWS_PROFILE is not set" >&2; exit 1; fi
-if [ -z "${AWS_DEFAULT_REGION:-}" ]; then echo "ERROR aws_backup_validation: AWS_DEFAULT_REGION is not set" >&2; exit 1; fi
-
-PROFILE="$AWS_PROFILE"
-REGION="$AWS_DEFAULT_REGION"
+# Identity/region come from the AWS CLI credential chain. A manifest target may
+# set AWS_PROFILE/AWS_DEFAULT_REGION (multi-account / multi-region fanout); when
+# unset, the CLI uses the ambient identity/region. The helper sets PROFILE/REGION
+# (for metadata) and provides aws_target_id (for the output filename).
+source "$(dirname "$0")/../_shared/aws.sh"
 
 # Per-target output filename (profile+region) so multi-target runs don't overwrite.
-_TARGET_ID=$(printf '%s_%s' "$PROFILE" "$REGION" | tr -c 'A-Za-z0-9._-' '_')
+_TARGET_ID="$(aws_target_id "$REGION")"
 OUTPUT_JSON="$OUTPUT_DIR/aws_backup_validation_${_TARGET_ID}.json"
 _FETCHER_TMP_JSON="$(mktemp -t aws_backup_validation.XXXXXX.json)"
 _FAILURE_LOG="$(mktemp -t aws_backup_validation_fail.XXXXXX)"
@@ -31,8 +31,10 @@ trap 'rm -f "$_FETCHER_TMP_JSON" "$_FAILURE_LOG"' EXIT
 log_info() { printf '%s INFO aws_backup_validation %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 log_error() { printf '%s ERROR aws_backup_validation %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 
-# Common AWS CLI args (always include region)
-AWS_ARGS=(--profile "$PROFILE" --region "$REGION")
+# No explicit --profile/--region: the CLI reads AWS_PROFILE/AWS_DEFAULT_REGION
+# from the env (set by the runner from a target, or ambient). Kept as an (empty)
+# array so the existing "${AWS_ARGS[@]}" call sites are unchanged.
+AWS_ARGS=()
 COMPONENT="aws_backup_validation"
 
 CALLER_IDENTITY=$(aws sts get-caller-identity "${AWS_ARGS[@]}" --output json 2>/dev/null)

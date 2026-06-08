@@ -9,7 +9,7 @@
 # true, skips roles with arn:aws:iam::aws:role/* (AWS-managed).
 #
 # Output: $EVIDENCE_DIR/aws_iam_roles.json
-# Required env: AWS_PROFILE, AWS_DEFAULT_REGION
+# Optional env (else ambient identity; region defaults to us-east-1): AWS_PROFILE, AWS_DEFAULT_REGION
 # Required tools: aws, jq
 
 set -o pipefail
@@ -19,16 +19,19 @@ set -o pipefail
 OUTPUT_DIR="${EVIDENCE_DIR:-./evidence}"
 mkdir -p "$OUTPUT_DIR"
 
-if [ -z "${AWS_PROFILE:-}" ]; then
-    echo "ERROR aws_iam_roles: AWS_PROFILE is not set" >&2; exit 1
-fi
+# Identity comes from the AWS CLI's own credential chain. A manifest target may
+# set AWS_PROFILE (per-account fanout); when unset, the CLI uses the ambient
+# identity. The helper sets PROFILE (for metadata) and provides aws_target_id.
+source "$(dirname "$0")/../_shared/aws.sh"
 
-PROFILE="$AWS_PROFILE"
-REGION="${AWS_DEFAULT_REGION:-us-east-1}"
+# Global service: region only selects the API endpoint, never part of identity.
+# IAM still needs *a* region resolvable, so default it and export for the CLI.
+REGION="${REGION:-us-east-1}"
+export AWS_DEFAULT_REGION="$REGION"
 EXCLUDE_AWS_ROLES="${EXCLUDE_AWS_MANAGED_ROLES:-false}"
 
-# Per-account output filename (profile) — global service, region not part of identity.
-_TARGET_ID=$(printf '%s' "$PROFILE" | tr -c 'A-Za-z0-9._-' '_')
+# Per-account output filename (profile, or "ambient") — global service, no region.
+_TARGET_ID="$(aws_target_id)"
 OUTPUT_JSON="$OUTPUT_DIR/aws_iam_roles_${_TARGET_ID}.json"
 _FETCHER_TMP_JSON="$(mktemp -t aws_iam_roles.XXXXXX.json)"
 _FAILURE_LOG="$(mktemp -t aws_iam_roles_fail.XXXXXX)"
@@ -37,7 +40,7 @@ trap 'rm -f "$_FETCHER_TMP_JSON" "$_FAILURE_LOG"' EXIT
 log_info() { printf '%s INFO aws_iam_roles %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 log_error() { printf '%s ERROR aws_iam_roles %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 
-CALLER_IDENTITY=$(aws sts get-caller-identity --profile "$PROFILE" --output json 2>/dev/null)
+CALLER_IDENTITY=$(aws sts get-caller-identity --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws sts get-caller-identity failed" >> "$_FAILURE_LOG"
     CALLER_IDENTITY='{"Account":"unknown","Arn":"unknown"}'
@@ -52,7 +55,7 @@ jq -n \
   '{"metadata": {"profile": $profile, "region": $region, "datetime": $datetime, "account_id": $account_id, "arn": $arn}, "results": []}' \
   > "$OUTPUT_JSON"
 
-roles=$(aws iam list-roles --profile "$PROFILE" --region "$REGION" --query 'Roles[*].[RoleName,Arn,CreateDate]' --output json 2>/dev/null)
+roles=$(aws iam list-roles --query 'Roles[*].[RoleName,Arn,CreateDate]' --output json 2>/dev/null)
 list_exit=$?
 if [ $list_exit -ne 0 ]; then
     echo "aws iam list-roles failed (exit=$list_exit)" >> "$_FAILURE_LOG"
@@ -66,26 +69,26 @@ else
             continue
         fi
 
-        role_data=$(aws iam get-role --profile "$PROFILE" --region "$REGION" --role-name "$role_name" --query 'Role' --output json 2>/dev/null)
+        role_data=$(aws iam get-role --role-name "$role_name" --query 'Role' --output json 2>/dev/null)
         if [ $? -ne 0 ]; then
             echo "aws iam get-role ($role_name) failed" >> "$_FAILURE_LOG"
             continue
         fi
         trust_policy=$(echo "$role_data" | jq '.AssumeRolePolicyDocument')
 
-        attached_policies=$(aws iam list-attached-role-policies --profile "$PROFILE" --region "$REGION" --role-name "$role_name" --query 'AttachedPolicies[*].[PolicyName,PolicyArn]' --output json 2>/dev/null)
+        attached_policies=$(aws iam list-attached-role-policies --role-name "$role_name" --query 'AttachedPolicies[*].[PolicyName,PolicyArn]' --output json 2>/dev/null)
         if [ $? -ne 0 ]; then
             echo "aws iam list-attached-role-policies ($role_name) failed" >> "$_FAILURE_LOG"
             attached_policies='[]'
         fi
 
-        instance_profiles=$(aws iam list-instance-profiles-for-role --profile "$PROFILE" --region "$REGION" --role-name "$role_name" --query 'InstanceProfiles[*].[InstanceProfileName,InstanceProfileId]' --output json 2>/dev/null)
+        instance_profiles=$(aws iam list-instance-profiles-for-role --role-name "$role_name" --query 'InstanceProfiles[*].[InstanceProfileName,InstanceProfileId]' --output json 2>/dev/null)
         if [ $? -ne 0 ]; then
             echo "aws iam list-instance-profiles-for-role ($role_name) failed" >> "$_FAILURE_LOG"
             instance_profiles='[]'
         fi
 
-        role_tags=$(aws iam list-role-tags --profile "$PROFILE" --region "$REGION" --role-name "$role_name" --query 'Tags[*]' --output json 2>/dev/null)
+        role_tags=$(aws iam list-role-tags --role-name "$role_name" --query 'Tags[*]' --output json 2>/dev/null)
         if [ $? -ne 0 ]; then
             echo "aws iam list-role-tags ($role_name) failed" >> "$_FAILURE_LOG"
             role_tags='[]'
@@ -113,7 +116,7 @@ else
     done
 fi
 
-password_policy=$(aws iam get-account-password-policy --profile "$PROFILE" --region "$REGION" --query 'PasswordPolicy' --output json 2>/dev/null)
+password_policy=$(aws iam get-account-password-policy --query 'PasswordPolicy' --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     # Note: no policy set returns NoSuchEntity, which is meaningful absence, not a network failure.
     password_policy='null'

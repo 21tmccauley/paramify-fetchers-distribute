@@ -1,7 +1,7 @@
 #!/bin/bash
 # Collects RDS instance TLS/SSL configuration and available CA certificates.
 # Output: $EVIDENCE_DIR/aws_rds_tls_configuration.json
-# Required env: AWS_PROFILE, AWS_DEFAULT_REGION
+# Optional env (else the AWS CLI ambient identity/region): AWS_PROFILE, AWS_DEFAULT_REGION
 # Required tools: aws, jq
 
 set -o pipefail
@@ -11,14 +11,14 @@ set -o pipefail
 OUTPUT_DIR="${EVIDENCE_DIR:-./evidence}"
 mkdir -p "$OUTPUT_DIR"
 
-if [ -z "${AWS_PROFILE:-}" ]; then echo "ERROR aws_rds_tls_configuration: AWS_PROFILE is not set" >&2; exit 1; fi
-if [ -z "${AWS_DEFAULT_REGION:-}" ]; then echo "ERROR aws_rds_tls_configuration: AWS_DEFAULT_REGION is not set" >&2; exit 1; fi
-
-PROFILE="$AWS_PROFILE"
-REGION="$AWS_DEFAULT_REGION"
+# Identity/region come from the AWS CLI credential chain. A manifest target may
+# set AWS_PROFILE/AWS_DEFAULT_REGION (multi-account / multi-region fanout); when
+# unset, the CLI uses the ambient identity/region. The helper sets PROFILE/REGION
+# (for metadata) and provides aws_target_id (for the output filename).
+source "$(dirname "$0")/../_shared/aws.sh"
 
 # Per-target output filename (profile+region) so multi-target runs don't overwrite.
-_TARGET_ID=$(printf '%s_%s' "$PROFILE" "$REGION" | tr -c 'A-Za-z0-9._-' '_')
+_TARGET_ID="$(aws_target_id "$REGION")"
 OUTPUT_JSON="$OUTPUT_DIR/aws_rds_tls_configuration_${_TARGET_ID}.json"
 _FETCHER_TMP_JSON="$(mktemp -t aws_rds_tls_configuration.XXXXXX.json)"
 _FAILURE_LOG="$(mktemp -t aws_rds_tls_configuration_fail.XXXXXX)"
@@ -27,7 +27,7 @@ trap 'rm -f "$_FETCHER_TMP_JSON" "$_FAILURE_LOG"' EXIT
 log_info() { printf '%s INFO aws_rds_tls_configuration %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 log_error() { printf '%s ERROR aws_rds_tls_configuration %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 
-CALLER_IDENTITY=$(aws sts get-caller-identity --profile "$PROFILE" --output json 2>/dev/null)
+CALLER_IDENTITY=$(aws sts get-caller-identity --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws sts get-caller-identity failed" >> "$_FAILURE_LOG"
     CALLER_IDENTITY='{"Account":"unknown","Arn":"unknown"}'
@@ -46,7 +46,7 @@ jq -n \
 
 # 1. Get all RDS instances
 instances_raw=$(aws rds describe-db-instances \
-    --profile "$PROFILE" --region "$REGION" \
+    \
     --query 'DBInstances[*].{
         id:DBInstanceIdentifier,
         engine:Engine,
@@ -71,7 +71,7 @@ pg_results=()
 for pg in $param_groups; do
     pg_params=$(aws rds describe-db-parameters \
         --db-parameter-group-name "$pg" \
-        --profile "$PROFILE" --region "$REGION" \
+        \
         --query 'Parameters[?ParameterName==`ssl_min_protocol_version` || ParameterName==`ssl_max_protocol_version` || ParameterName==`rds.force_ssl`].{name:ParameterName,value:ParameterValue,source:Source,apply_method:ApplyMethod,allowed_values:AllowedValues}' \
         --output json 2>/dev/null)
     ec=$?
@@ -107,7 +107,7 @@ done
 
 # 5. Get CA certificates
 certs_raw=$(aws rds describe-certificates \
-    --profile "$PROFILE" --region "$REGION" \
+    \
     --query 'Certificates[*].{id:CertificateIdentifier,type:CertificateType,valid_from:ValidFrom,valid_till:ValidTill}' \
     --output json 2>/dev/null)
 ec=$?

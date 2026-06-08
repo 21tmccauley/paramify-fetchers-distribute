@@ -266,9 +266,16 @@ def run_entry(
         return [_invoke(fetcher, env, None, output_dir, on_line)]
 
     if not entry.targets:
-        raise RuntimeError(
-            f"{fetcher.name}: supports_targets but manifest entry has no targets[]"
-        )
+        # No targets[] given. If every target field is optional, run once with the
+        # ambient identity/region (the AWS credential chain's default) rather than
+        # fanning out — "collect where deployed." A still-required target field is a
+        # real manifest error, so keep raising in that case.
+        if any(f.required for f in fetcher.target_schema.values()):
+            raise RuntimeError(
+                f"{fetcher.name}: supports_targets but manifest entry has no targets[]"
+            )
+        env = _build_env(fetcher, entry, None, output_dir, platform_spec, platform_cfg)
+        return [_invoke(fetcher, env, None, output_dir, on_line)]
 
     results = []
     for target in entry.targets:

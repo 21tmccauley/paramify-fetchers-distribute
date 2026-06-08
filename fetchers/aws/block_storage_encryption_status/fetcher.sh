@@ -6,7 +6,7 @@
 # encryption. Aggregates a coverage percentage.
 #
 # Output: $EVIDENCE_DIR/aws_block_storage_encryption_status.json
-# Required env: AWS_PROFILE, AWS_DEFAULT_REGION
+# Optional env (else the AWS CLI ambient identity/region): AWS_PROFILE, AWS_DEFAULT_REGION
 # Required tools: aws, jq
 
 set -o pipefail
@@ -16,18 +16,14 @@ set -o pipefail
 OUTPUT_DIR="${EVIDENCE_DIR:-./evidence}"
 mkdir -p "$OUTPUT_DIR"
 
-if [ -z "${AWS_PROFILE:-}" ]; then
-    echo "ERROR aws_block_storage_encryption_status: AWS_PROFILE is not set" >&2; exit 1
-fi
-if [ -z "${AWS_DEFAULT_REGION:-}" ]; then
-    echo "ERROR aws_block_storage_encryption_status: AWS_DEFAULT_REGION is not set" >&2; exit 1
-fi
-
-PROFILE="$AWS_PROFILE"
-REGION="$AWS_DEFAULT_REGION"
+# Identity/region come from the AWS CLI credential chain. A manifest target may
+# set AWS_PROFILE/AWS_DEFAULT_REGION (multi-account / multi-region fanout); when
+# unset, the CLI uses the ambient identity/region. The helper sets PROFILE/REGION
+# (for metadata) and provides aws_target_id (for the output filename).
+source "$(dirname "$0")/../_shared/aws.sh"
 
 # Per-target output filename (profile+region) so multi-target runs don't overwrite.
-_TARGET_ID=$(printf '%s_%s' "$PROFILE" "$REGION" | tr -c 'A-Za-z0-9._-' '_')
+_TARGET_ID="$(aws_target_id "$REGION")"
 OUTPUT_JSON="$OUTPUT_DIR/aws_block_storage_encryption_status_${_TARGET_ID}.json"
 _FAILURE_LOG="$(mktemp -t aws_block_storage_encryption_status_fail.XXXXXX)"
 trap 'rm -f "$_FAILURE_LOG"' EXIT
@@ -35,7 +31,7 @@ trap 'rm -f "$_FAILURE_LOG"' EXIT
 log_info() { printf '%s INFO aws_block_storage_encryption_status %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 log_error() { printf '%s ERROR aws_block_storage_encryption_status %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 
-CALLER_IDENTITY=$(aws sts get-caller-identity --profile "$PROFILE" --output json 2>/dev/null)
+CALLER_IDENTITY=$(aws sts get-caller-identity --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws sts get-caller-identity failed" >> "$_FAILURE_LOG"
     CALLER_IDENTITY='{"Account":"unknown","Arn":"unknown"}'
@@ -44,12 +40,12 @@ ACCOUNT_ID=$(echo "$CALLER_IDENTITY" | jq -r '.Account // "unknown"')
 ARN=$(echo "$CALLER_IDENTITY" | jq -r '.Arn // "unknown"')
 DATETIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-ebs_encryption_default=$(aws ec2 get-ebs-encryption-by-default --profile "$PROFILE" --region "$REGION" --query "EbsEncryptionByDefault" --output text 2>/dev/null)
+ebs_encryption_default=$(aws ec2 get-ebs-encryption-by-default --query "EbsEncryptionByDefault" --output text 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws ec2 get-ebs-encryption-by-default failed" >> "$_FAILURE_LOG"
     ebs_encryption_default="unknown"
 fi
-ebs_default_kms_key=$(aws ec2 get-ebs-default-kms-key-id --profile "$PROFILE" --region "$REGION" --query "KmsKeyId" --output text 2>/dev/null)
+ebs_default_kms_key=$(aws ec2 get-ebs-default-kms-key-id --query "KmsKeyId" --output text 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws ec2 get-ebs-default-kms-key-id failed" >> "$_FAILURE_LOG"
     ebs_default_kms_key="unknown"
@@ -60,14 +56,14 @@ encrypted_storage=0
 ebs_results=()
 efs_results=()
 
-volume_ids=$(aws ec2 describe-volumes --profile "$PROFILE" --region "$REGION" --query "Volumes[*].VolumeId" --output text 2>/dev/null)
+volume_ids=$(aws ec2 describe-volumes --query "Volumes[*].VolumeId" --output text 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws ec2 describe-volumes (list) failed" >> "$_FAILURE_LOG"
     log_error "Failed to list EBS volumes"
 else
     for volume in $volume_ids; do
         total_storage=$((total_storage + 1))
-        volume_details=$(aws ec2 describe-volumes --volume-ids "$volume" --profile "$PROFILE" --region "$REGION" 2>/dev/null)
+        volume_details=$(aws ec2 describe-volumes --volume-ids "$volume" 2>/dev/null)
         if [ $? -ne 0 ]; then
             echo "aws ec2 describe-volumes ($volume) failed" >> "$_FAILURE_LOG"
             continue
@@ -84,14 +80,14 @@ else
     done
 fi
 
-fs_ids=$(aws efs describe-file-systems --profile "$PROFILE" --region "$REGION" --query "FileSystems[*].FileSystemId" --output text 2>/dev/null)
+fs_ids=$(aws efs describe-file-systems --query "FileSystems[*].FileSystemId" --output text 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws efs describe-file-systems (list) failed" >> "$_FAILURE_LOG"
     log_error "Failed to list EFS file systems"
 else
     for fs in $fs_ids; do
         total_storage=$((total_storage + 1))
-        fs_details=$(aws efs describe-file-systems --file-system-id "$fs" --profile "$PROFILE" --region "$REGION" 2>/dev/null)
+        fs_details=$(aws efs describe-file-systems --file-system-id "$fs" 2>/dev/null)
         if [ $? -ne 0 ]; then
             echo "aws efs describe-file-systems ($fs) failed" >> "$_FAILURE_LOG"
             continue

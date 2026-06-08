@@ -3,7 +3,7 @@
 # Inspects ELBv2 application and network load balancers and their listener SSL
 # policies to report which enforce in-transit encryption.
 # Output: $EVIDENCE_DIR/aws_load_balancer_encryption_status.json
-# Required env: AWS_PROFILE, AWS_DEFAULT_REGION
+# Optional env (else the AWS CLI ambient identity/region): AWS_PROFILE, AWS_DEFAULT_REGION
 # Required tools: aws, jq
 
 set -o pipefail
@@ -13,14 +13,14 @@ set -o pipefail
 OUTPUT_DIR="${EVIDENCE_DIR:-./evidence}"
 mkdir -p "$OUTPUT_DIR"
 
-if [ -z "${AWS_PROFILE:-}" ]; then echo "ERROR aws_load_balancer_encryption_status: AWS_PROFILE is not set" >&2; exit 1; fi
-if [ -z "${AWS_DEFAULT_REGION:-}" ]; then echo "ERROR aws_load_balancer_encryption_status: AWS_DEFAULT_REGION is not set" >&2; exit 1; fi
-
-PROFILE="$AWS_PROFILE"
-REGION="$AWS_DEFAULT_REGION"
+# Identity/region come from the AWS CLI credential chain. A manifest target may
+# set AWS_PROFILE/AWS_DEFAULT_REGION (multi-account / multi-region fanout); when
+# unset, the CLI uses the ambient identity/region. The helper sets PROFILE/REGION
+# (for metadata) and provides aws_target_id (for the output filename).
+source "$(dirname "$0")/../_shared/aws.sh"
 
 # Per-target output filename (profile+region) so multi-target runs don't overwrite.
-_TARGET_ID=$(printf '%s_%s' "$PROFILE" "$REGION" | tr -c 'A-Za-z0-9._-' '_')
+_TARGET_ID="$(aws_target_id "$REGION")"
 OUTPUT_JSON="$OUTPUT_DIR/aws_load_balancer_encryption_status_${_TARGET_ID}.json"
 _FETCHER_TMP_JSON="$(mktemp -t aws_load_balancer_encryption_status.XXXXXX.json)"
 _FAILURE_LOG="$(mktemp -t aws_load_balancer_encryption_status_fail.XXXXXX)"
@@ -29,7 +29,7 @@ trap 'rm -f "$_FETCHER_TMP_JSON" "$_FAILURE_LOG"' EXIT
 log_info() { printf '%s INFO aws_load_balancer_encryption_status %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 log_error() { printf '%s ERROR aws_load_balancer_encryption_status %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 
-CALLER_IDENTITY=$(aws sts get-caller-identity --profile "$PROFILE" --output json 2>/dev/null)
+CALLER_IDENTITY=$(aws sts get-caller-identity --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws sts get-caller-identity failed" >> "$_FAILURE_LOG"
     CALLER_IDENTITY='{"Account":"unknown","Arn":"unknown"}'
@@ -57,7 +57,7 @@ check_load_balancer_encryption() {
     local listeners
     listeners=$(aws elbv2 describe-listeners --load-balancer-arn "$lb_arn" \
         --query "Listeners[*].{Port:Port,Protocol:Protocol,SslPolicy:SslPolicy}" \
-        --profile "$PROFILE" --region "$REGION" 2>/dev/null)
+        2>/dev/null)
     local ec=$?
     if [ $ec -ne 0 ]; then
         echo "aws elbv2 describe-listeners ($lb_arn) failed (exit=$ec)" >> "$_FAILURE_LOG"
@@ -84,7 +84,7 @@ check_load_balancer_encryption() {
 log_info "Checking load balancer encryption"
 
 # Get all load balancers
-load_balancers=$(aws elbv2 describe-load-balancers --profile "$PROFILE" --region "$REGION" 2>/dev/null)
+load_balancers=$(aws elbv2 describe-load-balancers 2>/dev/null)
 ec=$?
 if [ $ec -ne 0 ]; then
     echo "aws elbv2 describe-load-balancers failed (exit=$ec)" >> "$_FAILURE_LOG"
@@ -112,7 +112,7 @@ while IFS=$'\t' read -r arn type; do
         # Get SSL policy details for the output
         ssl_policy=$(aws elbv2 describe-listeners --load-balancer-arn "$arn" \
             --query "Listeners[*].{Port:Port,Protocol:Protocol,SslPolicy:SslPolicy}" \
-            --profile "$PROFILE" --region "$REGION" 2>/dev/null | jq -r '.[0].SslPolicy // "none"')
+            2>/dev/null | jq -r '.[0].SslPolicy // "none"')
         alb_details+=("{\"arn\":\"$arn\",\"encrypted\":$is_encrypted,\"ssl_policy\":\"$ssl_policy\"}")
     elif [[ "$type" == "network" ]]; then
         nlb_count=$((nlb_count + 1))
@@ -123,7 +123,7 @@ while IFS=$'\t' read -r arn type; do
         # Get SSL policy details for the output
         ssl_policy=$(aws elbv2 describe-listeners --load-balancer-arn "$arn" \
             --query "Listeners[*].{Port:Port,Protocol:Protocol,SslPolicy:SslPolicy}" \
-            --profile "$PROFILE" --region "$REGION" 2>/dev/null | jq -r '.[0].SslPolicy // "none"')
+            2>/dev/null | jq -r '.[0].SslPolicy // "none"')
         nlb_details+=("{\"arn\":\"$arn\",\"encrypted\":$is_encrypted,\"ssl_policy\":\"$ssl_policy\"}")
     fi
 done < <(echo "$load_balancers" | jq -r '.LoadBalancers[] | [.LoadBalancerArn, .Type] | @tsv')

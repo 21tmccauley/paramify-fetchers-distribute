@@ -5,7 +5,7 @@ work (what's ported, what's in progress), see [`handoff.md`](handoff.md).
 **Author:** Tate
 **Last updated:** 2026-06-01
 
-This document captures the design for a longer-term fetcher framework that supports both internal use and customer/FDE deployment. The near-term path (moving existing fetchers to GitHub Actions with OIDC for internal use) is a separate effort and is not the subject of this doc.
+This document captures the design for a longer-term fetcher framework that supports both internal use and customer/FDE deployment. The near-term **MVP deployment is the containerized bundle in `deploy/`** — a Docker image (the tool, its Python deps, and the CLIs fetchers shell out to) run on a schedule via compose/cron or a Kubernetes `CronJob`, with secrets hydrated at startup (env, or AWS Secrets Manager) and AWS resolved through the ambient credential chain (IRSA in-cluster). See [`deploy/README.md`](../deploy/README.md). This doc covers the framework design that bundle packages; for the deployment specifics see `deploy/`.
 
 ---
 
@@ -68,7 +68,7 @@ Every fetcher must satisfy this interface. **`fetcher_schema.json` now enforces 
 ### Output
 
 - One or more JSON files in the output directory following a defined **envelope schema** (metadata block + payload block) — now built; the runner wraps each output file
-  - Metadata: fetcher name, version, category, run ID, target identifier, timestamp, status, exit code, evidence_set (when present), and a stderr_tail on failure
+  - Metadata: fetcher name, version, category, run ID, target identifier, timestamp, status, exit code, evidence_set (when present), and an error (stderr tail) on failure
   - Payload: the actual evidence data
 - A **structured log stream** (stdout JSON lines is fine)
 - An **exit code** with documented meanings (0 = success; non-zero for documented failure categories)
@@ -190,6 +190,8 @@ manifest <sub>               build/edit a manifest file (-f/--file, default ./ma
 ```
 
 `manifest` subcommands: `init [--output-dir DIR]`, `add <fetcher>`, `remove <fetcher>`, `set-config <fetcher> key=value`, `set-secret <fetcher> <secret_name> <ENV_VAR>`, `add-target <fetcher> k=v ... [--secret name=ENV_VAR ...]`, `set-platform-config <category> key=value`, `set-passthrough <category> ENV_VAR ...`, `set-output-dir <dir>`, `show [--json]`. The builder reads each `fetcher.yaml` and warns which secrets/config are still missing until the fetcher is runnable.
+
+> **Note:** this list is illustrative of the surface's shape, not exhaustive — the live CLI also has `manifests`, `runs`, `evidence`, and `manifest new` / `remove-target`. The authoritative, current surface is `CLAUDE.md` / [`fetcher_contract.md`](fetcher_contract.md) (and `paramify --help`).
 
 ### Execution and the run directory
 
@@ -347,10 +349,8 @@ paramify-fetchers/
     ├── handoff.md                    # current state of the work (source of truth)
     ├── fetcher_contract.md           # the runner⇄fetcher contract
     ├── porting_playbook.md           # how to port an existing fetcher (the "why")
-    ├── ai_port_recipe.md             # strict imperative port checklist (the "what")
     ├── authoring_a_fetcher.md        # how to write a new fetcher from scratch
-    ├── run_manifest_reference.md     # manifest format reference
-    └── fetcher_purity_audit.md       # point-in-time audit of the first 26 fetchers
+    └── run_manifest_reference.md     # manifest format reference
 ```
 
 ### Naming conventions
@@ -417,7 +417,7 @@ AWS port is complete (30/30). The pieces that make this run:
 
 Done since the last revision:
 
-- ~~**Envelope schema**~~ — DONE (2026-05-28). The runner wraps each output file in the standard `metadata` + `payload` envelope (metadata carries fetcher/version/category/run_id/target/collected_at/status/exit_code, plus `evidence_set` when present and a `stderr_tail` on failure); fetchers still write raw payloads. See [`envelope_design.md`](envelope_design.md).
+- ~~**Envelope schema**~~ — DONE (2026-05-28). The runner wraps each output file in the standard `metadata` + `payload` envelope (metadata carries fetcher/version/category/run_id/target/collected_at/status/exit_code, plus `evidence_set` when present and an `error` (stderr tail) on failure); fetchers still write raw payloads. See [`envelope_design.md`](envelope_design.md).
 - ~~**Config injection**~~ — DONE. Category defaults ← platform config ← per-fetcher config, injected as env vars via `config_schema` `env` mappings; `auth.passthrough_env` opens the whitelist for ambient cloud vars.
 - ~~**Evidence-set identity**~~ — DONE. Every `fetcher.yaml` carries an `evidence_set` block (reference_id / name / instructions), backfilled from the upstream catalog; it flows into the envelope and drives uploader get-or-create.
 - ~~**Evidence uploader**~~ — DONE. `uploaders/paramify_evidence/` ships (get-or-create by reference_id, multipart upload, idempotent, `--dry-run`, https-only token guard).
@@ -447,14 +447,14 @@ Claude Code's default behavior is to refactor as it works. For fetcher ports, sc
 
 ---
 
-## Near-term path (separate from this document)
+## Near-term deployment: the containerized bundle
 
-Internal evidence collection is moving to GitHub Actions with OIDC for AWS credentials. This is explicitly a temporary internal solution, not a customer-facing product. Two principles to follow during that work so it doesn't constrain the real framework later:
+The MVP deployment is the bundle in `deploy/` — a Docker image run on a schedule (compose/cron on a single host; a Kubernetes `CronJob` per cadence in-cluster). The collector runs collect→upload and the pod/container is transient. Secrets are hydrated at startup from the environment (or AWS Secrets Manager when `PARAMIFY_SECRETS_ID` is set); AWS auth uses the ambient credential chain (IRSA / instance role in-cluster, a named profile locally), with optional multi-account assume-role fanout. See [`deploy/README.md`](../deploy/README.md) and [`deploy/k8s/`](../deploy/k8s/).
 
-1. **Keep secret resolution at the workflow layer**, not in the fetchers. Fetchers stay env-var-driven; the Actions workflow handles OIDC → env var resolution. This means the eventual framework's secret resolver replaces the workflow logic without touching fetchers.
-2. **Write a `_run_metadata.json`** for each run capturing timestamp, fetcher versions/commit SHA, exit codes, durations. Cheap to add now, gives an audit trail, and validates the shape of the artifact the real framework will produce.
+Two principles this honors, so the deployment doesn't constrain the eventual framework:
 
-Risk to watch: the Actions workflow becoming the de facto deployment model for customers by inertia. When a customer needs to run fetchers, that's the trigger to do the real framework work, not to generalize the internal workflow.
+1. **Secret resolution stays outside the fetchers.** Fetchers remain env-var-driven; the entrypoint (and the eventual secret resolver) handles source → env var. The framework's resolver can replace the entrypoint logic without touching fetchers.
+2. **Every run writes a `_run_metadata.json`** capturing timestamp, fetcher versions, exit codes, and durations — an audit trail, and a preview of the artifact shape the framework produces.
 
 ---
 

@@ -6,7 +6,7 @@
 # Includes the AWS Config rule compliance for cmk-backing-key-rotation-enabled.
 #
 # Output: $EVIDENCE_DIR/aws_kms_key_rotation.json
-# Required env: AWS_PROFILE, AWS_DEFAULT_REGION
+# Optional env (else the AWS CLI ambient identity/region): AWS_PROFILE, AWS_DEFAULT_REGION
 # Required tools: aws, jq
 #
 # NOTE: The Config rule name is hardcoded to a Paramify-specific conformance
@@ -21,18 +21,14 @@ set -o pipefail
 OUTPUT_DIR="${EVIDENCE_DIR:-./evidence}"
 mkdir -p "$OUTPUT_DIR"
 
-if [ -z "${AWS_PROFILE:-}" ]; then
-    echo "ERROR aws_kms_key_rotation: AWS_PROFILE is not set" >&2; exit 1
-fi
-if [ -z "${AWS_DEFAULT_REGION:-}" ]; then
-    echo "ERROR aws_kms_key_rotation: AWS_DEFAULT_REGION is not set" >&2; exit 1
-fi
-
-PROFILE="$AWS_PROFILE"
-REGION="$AWS_DEFAULT_REGION"
+# Identity/region come from the AWS CLI credential chain. A manifest target may
+# set AWS_PROFILE/AWS_DEFAULT_REGION (multi-account / multi-region fanout); when
+# unset, the CLI uses the ambient identity/region. The helper sets PROFILE/REGION
+# (for metadata) and provides aws_target_id (for the output filename).
+source "$(dirname "$0")/../_shared/aws.sh"
 
 # Per-target output filename (profile+region) so multi-target runs don't overwrite.
-_TARGET_ID=$(printf '%s_%s' "$PROFILE" "$REGION" | tr -c 'A-Za-z0-9._-' '_')
+_TARGET_ID="$(aws_target_id "$REGION")"
 OUTPUT_JSON="$OUTPUT_DIR/aws_kms_key_rotation_${_TARGET_ID}.json"
 _FAILURE_LOG="$(mktemp -t aws_kms_key_rotation_fail.XXXXXX)"
 trap 'rm -f "$_FAILURE_LOG"' EXIT
@@ -40,7 +36,7 @@ trap 'rm -f "$_FAILURE_LOG"' EXIT
 log_info() { printf '%s INFO aws_kms_key_rotation %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 log_error() { printf '%s ERROR aws_kms_key_rotation %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 
-CALLER_IDENTITY=$(aws sts get-caller-identity --profile "$PROFILE" --output json 2>/dev/null)
+CALLER_IDENTITY=$(aws sts get-caller-identity --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws sts get-caller-identity failed" >> "$_FAILURE_LOG"
     CALLER_IDENTITY='{"Account":"unknown","Arn":"unknown"}'
@@ -50,7 +46,7 @@ ARN=$(echo "$CALLER_IDENTITY" | jq -r '.Arn // "unknown"')
 DATETIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 config_rule_name="cmk-backing-key-rotation-enabled-conformance-pack-j3wepwlkw"
-config_compliance=$(aws configservice describe-compliance-by-config-rule --config-rule-name "$config_rule_name" --profile "$PROFILE" --region "$REGION" 2>/dev/null)
+config_compliance=$(aws configservice describe-compliance-by-config-rule --config-rule-name "$config_rule_name" 2>/dev/null)
 if [ $? -ne 0 ]; then
     # Treat as a soft signal — the rule may not exist outside Paramify's account.
     config_compliance='{"ComplianceByConfigRules": []}'
@@ -60,7 +56,7 @@ total_keys=0
 rotated_keys=0
 kms_results=()
 
-key_ids=$(aws kms list-keys --profile "$PROFILE" --region "$REGION" --query "Keys[*].KeyId" --output text 2>/dev/null)
+key_ids=$(aws kms list-keys --query "Keys[*].KeyId" --output text 2>/dev/null)
 list_exit=$?
 if [ $list_exit -ne 0 ]; then
     echo "aws kms list-keys failed (exit=$list_exit)" >> "$_FAILURE_LOG"
@@ -70,12 +66,12 @@ else
         [ -z "$key_id" ] && continue
         total_keys=$((total_keys + 1))
 
-        key_details=$(aws kms describe-key --key-id "$key_id" --profile "$PROFILE" --region "$REGION" 2>/dev/null)
+        key_details=$(aws kms describe-key --key-id "$key_id" 2>/dev/null)
         if [ $? -ne 0 ]; then
             echo "aws kms describe-key ($key_id) failed" >> "$_FAILURE_LOG"
             key_details='{"KeyMetadata": {}}'
         fi
-        key_rotation_status=$(aws kms get-key-rotation-status --key-id "$key_id" --profile "$PROFILE" --region "$REGION" 2>/dev/null)
+        key_rotation_status=$(aws kms get-key-rotation-status --key-id "$key_id" 2>/dev/null)
         if [ $? -ne 0 ]; then
             echo "aws kms get-key-rotation-status ($key_id) failed" >> "$_FAILURE_LOG"
             key_rotation_status='{"KeyRotationEnabled": false}'
@@ -90,7 +86,7 @@ else
             rotated_keys=$((rotated_keys + 1))
         fi
 
-        key_policy=$(aws kms get-key-policy --key-id "$key_id" --policy-name default --profile "$PROFILE" --region "$REGION" 2>/dev/null)
+        key_policy=$(aws kms get-key-policy --key-id "$key_id" --policy-name default 2>/dev/null)
         if [ $? -ne 0 ]; then
             echo "aws kms get-key-policy ($key_id) failed" >> "$_FAILURE_LOG"
             key_policy='{}'

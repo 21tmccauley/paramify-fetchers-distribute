@@ -2,7 +2,7 @@
 # Lists AWS GuardDuty detectors and their configuration plus a health summary.
 # No detectors is valid evidence that GuardDuty is not enabled (not a failure).
 # Output: $EVIDENCE_DIR/aws_guard_duty.json
-# Required env: AWS_PROFILE, AWS_DEFAULT_REGION
+# Optional env (else the CLI's ambient identity/region): AWS_PROFILE, AWS_DEFAULT_REGION
 # Required tools: aws, jq
 
 set -o pipefail
@@ -12,14 +12,14 @@ set -o pipefail
 OUTPUT_DIR="${EVIDENCE_DIR:-./evidence}"
 mkdir -p "$OUTPUT_DIR"
 
-if [ -z "${AWS_PROFILE:-}" ]; then echo "ERROR aws_guard_duty: AWS_PROFILE is not set" >&2; exit 1; fi
-if [ -z "${AWS_DEFAULT_REGION:-}" ]; then echo "ERROR aws_guard_duty: AWS_DEFAULT_REGION is not set" >&2; exit 1; fi
+# Identity/region come from the AWS CLI's own credential chain. A manifest target
+# may set AWS_PROFILE/AWS_DEFAULT_REGION (multi-account / multi-region fanout);
+# when unset, the CLI uses the ambient identity/region. The helper sets PROFILE
+# and REGION (for metadata) and provides aws_target_id (for the filename).
+source "$(dirname "$0")/../_shared/aws.sh"
 
-PROFILE="$AWS_PROFILE"
-REGION="$AWS_DEFAULT_REGION"
-
-# Per-target output filename (profile+region) so multi-target runs don't overwrite.
-_TARGET_ID=$(printf '%s_%s' "$PROFILE" "$REGION" | tr -c 'A-Za-z0-9._-' '_')
+# Per-target output filename (profile+region, or "ambient") so fanout runs don't overwrite.
+_TARGET_ID="$(aws_target_id "$REGION")"
 OUTPUT_JSON="$OUTPUT_DIR/aws_guard_duty_${_TARGET_ID}.json"
 _FETCHER_TMP_JSON="$(mktemp -t aws_guard_duty.XXXXXX.json)"
 _FAILURE_LOG="$(mktemp -t aws_guard_duty_fail.XXXXXX)"
@@ -28,7 +28,7 @@ trap 'rm -f "$_FETCHER_TMP_JSON" "$_FAILURE_LOG"' EXIT
 log_info() { printf '%s INFO aws_guard_duty %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 log_error() { printf '%s ERROR aws_guard_duty %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 
-CALLER_IDENTITY=$(aws sts get-caller-identity --profile "$PROFILE" --output json 2>/dev/null)
+CALLER_IDENTITY=$(aws sts get-caller-identity --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws sts get-caller-identity failed" >> "$_FAILURE_LOG"
     CALLER_IDENTITY='{"Account":"unknown","Arn":"unknown"}'
@@ -46,7 +46,7 @@ jq -n \
 # --- per-script data collection (ported from upstream) ---
 
 # Get detector IDs. Empty list / GuardDuty not enabled is valid evidence, not a failure.
-detectors=$(aws guardduty list-detectors --profile "$PROFILE" --region "$REGION" --query 'DetectorIds[*]' --output json 2>/dev/null)
+detectors=$(aws guardduty list-detectors --query 'DetectorIds[*]' --output json 2>/dev/null)
 ec=$?
 if [ $ec -ne 0 ]; then
     echo "aws guardduty list-detectors failed (exit=$ec)" >> "$_FAILURE_LOG"
@@ -59,7 +59,7 @@ fi
 # Populate detector_details for each detector.
 if [ "$(echo "$detectors" | jq 'length')" -gt 0 ]; then
     echo "$detectors" | jq -r '.[]' | while read -r detector_id; do
-        detector_details=$(aws guardduty get-detector --profile "$PROFILE" --region "$REGION" --detector-id "$detector_id" --output json 2>/dev/null)
+        detector_details=$(aws guardduty get-detector --detector-id "$detector_id" --output json 2>/dev/null)
         ec=$?
         if [ $ec -ne 0 ] || [ -z "$detector_details" ] || ! echo "$detector_details" | jq . >/dev/null 2>&1; then
             echo "aws guardduty get-detector ($detector_id) failed (exit=$ec)" >> "$_FAILURE_LOG"
@@ -86,7 +86,7 @@ overall_data_sources=""
 while read -r detector_id; do
     [ -z "$detector_id" ] && continue
 
-    detector_details=$(aws guardduty get-detector --profile "$PROFILE" --region "$REGION" --detector-id "$detector_id" --output json 2>/dev/null)
+    detector_details=$(aws guardduty get-detector --detector-id "$detector_id" --output json 2>/dev/null)
     ec=$?
     if [ $ec -ne 0 ] || [ -z "$detector_details" ] || ! echo "$detector_details" | jq . >/dev/null 2>&1; then
         echo "aws guardduty get-detector ($detector_id) failed (exit=$ec)" >> "$_FAILURE_LOG"

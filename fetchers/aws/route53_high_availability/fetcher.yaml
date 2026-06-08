@@ -22,7 +22,7 @@ target_schema:
     description: Optional. Global service — only sets the API endpoint region, does not scope results.
   profile:
     type: string
-    required: true
+    required: false
     env: AWS_PROFILE
     description: AWS named profile (credentials resolved from ~/.aws / SSO).
 

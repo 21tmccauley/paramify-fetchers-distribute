@@ -1,15 +1,31 @@
 description: >
   AWS evidence fetchers (bash, aws CLI + jq). Each fetcher authenticates with
-  the standard AWS credential chain via AWS_PROFILE + AWS_DEFAULT_REGION.
+  the standard AWS credential chain. A manifest target may scope a run to a
+  specific (profile, region) for multi-account fanout; both are OPTIONAL — when a
+  target omits them (or a fetcher entry has no targets[] at all) the CLI uses the
+  ambient identity/region of wherever the runner is deployed ("collect here").
 
 # AWS credentials follow the standard chain (env keys, ~/.aws profiles, SSO,
 # IMDS instance roles, web identity). The runner strips ambient env by default;
-# for cloud-identity auth (e.g. EKS IRSA) the customer opts specific vars back
-# in per run under manifest platforms.aws.auth.passthrough_env. Listed here are
-# the common IRSA/web-identity vars; they only take effect when actually set in
-# the runner's environment, so listing them is safe.
+# these passthrough vars opt the standard cred/region + cloud-identity vars back
+# in so the ambient path works locally and in-cluster. They only take effect when
+# actually set in the runner's environment, so listing them is safe; a target's
+# profile/region still override the ambient values when provided.
 auth:
   passthrough_env:
+    # Explicit identity/region selection (set by the runner from a target, or
+    # ambient from the deploy environment).
+    - AWS_PROFILE
+    - AWS_DEFAULT_REGION
+    - AWS_REGION
+    # Static keys (local dev / non-AWS runners; prefer a role where possible).
+    - AWS_ACCESS_KEY_ID
+    - AWS_SECRET_ACCESS_KEY
+    - AWS_SESSION_TOKEN
+    # Alternate config/credentials file locations.
+    - AWS_CONFIG_FILE
+    - AWS_SHARED_CREDENTIALS_FILE
+    # Cloud-identity auth (EKS IRSA / Pod Identity / ECS / EC2 instance role).
     - AWS_WEB_IDENTITY_TOKEN_FILE
     - AWS_ROLE_ARN
     - AWS_ROLE_SESSION_NAME

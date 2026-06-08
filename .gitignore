@@ -29,6 +29,7 @@ venv/
 
 # --- Claude Code: ignore personal settings, keep shared skills + settings.json ---
 .claude/settings.local.json
+.claude/tmp/
 
 # --- TUI design preview renders (regenerable; open locally) ---
 *_mock.svg

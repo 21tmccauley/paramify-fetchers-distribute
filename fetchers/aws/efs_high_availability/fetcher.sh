@@ -6,7 +6,7 @@
 # Per-AZ distribution of mount targets is evidence for HA.
 #
 # Output: $EVIDENCE_DIR/aws_efs_high_availability.json
-# Required env: AWS_PROFILE, AWS_DEFAULT_REGION
+# Optional env (else the AWS CLI ambient identity/region): AWS_PROFILE, AWS_DEFAULT_REGION
 # Required tools: aws, jq
 
 set -o pipefail
@@ -16,20 +16,14 @@ set -o pipefail
 OUTPUT_DIR="${EVIDENCE_DIR:-./evidence}"
 mkdir -p "$OUTPUT_DIR"
 
-if [ -z "${AWS_PROFILE:-}" ]; then
-    echo "ERROR aws_efs_high_availability: AWS_PROFILE is not set" >&2
-    exit 1
-fi
-if [ -z "${AWS_DEFAULT_REGION:-}" ]; then
-    echo "ERROR aws_efs_high_availability: AWS_DEFAULT_REGION is not set" >&2
-    exit 1
-fi
-
-PROFILE="$AWS_PROFILE"
-REGION="$AWS_DEFAULT_REGION"
+# Identity/region come from the AWS CLI credential chain. A manifest target may
+# set AWS_PROFILE/AWS_DEFAULT_REGION (multi-account / multi-region fanout); when
+# unset, the CLI uses the ambient identity/region. The helper sets PROFILE/REGION
+# (for metadata) and provides aws_target_id (for the output filename).
+source "$(dirname "$0")/../_shared/aws.sh"
 
 # Per-target output filename (profile+region) so multi-target runs don't overwrite.
-_TARGET_ID=$(printf '%s_%s' "$PROFILE" "$REGION" | tr -c 'A-Za-z0-9._-' '_')
+_TARGET_ID="$(aws_target_id "$REGION")"
 OUTPUT_JSON="$OUTPUT_DIR/aws_efs_high_availability_${_TARGET_ID}.json"
 _FETCHER_TMP_JSON="$(mktemp -t aws_efs_high_availability.XXXXXX.json)"
 _FAILURE_LOG="$(mktemp -t aws_efs_high_availability_fail.XXXXXX)"
@@ -38,7 +32,7 @@ trap 'rm -f "$_FETCHER_TMP_JSON" "$_FAILURE_LOG"' EXIT
 log_info() { printf '%s INFO aws_efs_high_availability %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 log_error() { printf '%s ERROR aws_efs_high_availability %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 
-CALLER_IDENTITY=$(aws sts get-caller-identity --profile "$PROFILE" --output json 2>/dev/null)
+CALLER_IDENTITY=$(aws sts get-caller-identity --output json 2>/dev/null)
 caller_exit=$?
 if [ $caller_exit -ne 0 ]; then
     echo "aws sts get-caller-identity failed (exit=$caller_exit)" >> "$_FAILURE_LOG"
@@ -65,7 +59,7 @@ jq -n \
     "results": []
   }' > "$OUTPUT_JSON"
 
-efs_filesystems=$(aws efs describe-file-systems --profile "$PROFILE" --region "$REGION" --query 'FileSystems[*]' --output json 2>/dev/null)
+efs_filesystems=$(aws efs describe-file-systems --query 'FileSystems[*]' --output json 2>/dev/null)
 efs_exit=$?
 if [ $efs_exit -ne 0 ]; then
     echo "aws efs describe-file-systems failed (exit=$efs_exit)" >> "$_FAILURE_LOG"
@@ -74,7 +68,7 @@ else
     echo "$efs_filesystems" | jq -c '.[]' | while read -r efs; do
         fs_id=$(echo "$efs" | jq -r '.FileSystemId')
 
-        mount_targets=$(aws efs describe-mount-targets --profile "$PROFILE" --region "$REGION" --file-system-id "$fs_id" --query 'MountTargets[*]' --output json 2>/dev/null)
+        mount_targets=$(aws efs describe-mount-targets --file-system-id "$fs_id" --query 'MountTargets[*]' --output json 2>/dev/null)
         mt_exit=$?
         if [ $mt_exit -ne 0 ]; then
             echo "aws efs describe-mount-targets ($fs_id) failed (exit=$mt_exit)" >> "$_FAILURE_LOG"

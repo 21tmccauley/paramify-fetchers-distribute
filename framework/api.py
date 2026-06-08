@@ -284,7 +284,14 @@ def validate(manifest: dict, root: Path, fetchers=None, platforms=None) -> List[
         fetcher = fetchers[entry.use]
 
         if fetcher.supports_targets and not entry.targets:
-            errors.append(f"{entry.use}: supports_targets but no targets[] in manifest")
+            # No targets[] is valid when every target field is optional — the runner
+            # does one ambient run ("collect where deployed"). Only an error if a
+            # target field is actually required.
+            if any(f.required for f in fetcher.target_schema.values()):
+                errors.append(
+                    f"{entry.use}: supports_targets but no targets[] in manifest "
+                    f"(a required target field has no value)"
+                )
         if not fetcher.supports_targets and entry.targets:
             errors.append(f"{entry.use}: does not support targets but manifest has targets[]")
 
@@ -390,7 +397,8 @@ def run(
             overall_ok = False
             continue
         fetcher = fetchers[entry.use]
-        n_targets = len(entry.targets) if fetcher.supports_targets else 1
+        # An ambient run (supports_targets, no targets[]) is a single invocation.
+        n_targets = len(entry.targets) if (fetcher.supports_targets and entry.targets) else 1
         emit({
             "event": "fetcher_start",
             "fetcher": entry.use,

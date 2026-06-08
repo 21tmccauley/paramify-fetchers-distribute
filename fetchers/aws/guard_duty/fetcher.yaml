@@ -17,14 +17,14 @@ output:
 target_schema:
   region:
     type: string
-    required: true
+    required: false
     env: AWS_DEFAULT_REGION
-    description: AWS region to collect from.
+    description: Optional. AWS region to collect from; falls back to the ambient region (AWS_REGION / instance) when omitted.
   profile:
     type: string
-    required: true
+    required: false
     env: AWS_PROFILE
-    description: AWS named profile (credentials resolved from ~/.aws / SSO).
+    description: Optional. AWS named profile for multi-account fanout; falls back to the ambient identity (IRSA / instance role / SSO / env) when omitted.
 
 secrets: []
 

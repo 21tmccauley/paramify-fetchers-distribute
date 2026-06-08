@@ -2,7 +2,7 @@
 # Inventories IAM users (groups, access keys, MFA devices, login profile) and
 # IAM groups (attached policies) for access-review evidence.
 # Output: $EVIDENCE_DIR/aws_iam_users_groups.json
-# Required env: AWS_PROFILE, AWS_DEFAULT_REGION
+# Optional env (else the AWS CLI ambient identity/region): AWS_PROFILE, AWS_DEFAULT_REGION
 # Required tools: aws, jq
 
 set -o pipefail
@@ -12,13 +12,16 @@ set -o pipefail
 OUTPUT_DIR="${EVIDENCE_DIR:-./evidence}"
 mkdir -p "$OUTPUT_DIR"
 
-if [ -z "${AWS_PROFILE:-}" ]; then echo "ERROR aws_iam_users_groups: AWS_PROFILE is not set" >&2; exit 1; fi
-
-PROFILE="$AWS_PROFILE"
-REGION="${AWS_DEFAULT_REGION:-us-east-1}"
+# Identity/region come from the AWS CLI credential chain. A manifest target may
+# set AWS_PROFILE/AWS_DEFAULT_REGION (multi-account / multi-region fanout); when
+# unset, the CLI uses the ambient identity/region. The helper sets PROFILE/REGION
+# (for metadata) and provides aws_target_id (for the output filename).
+source "$(dirname "$0")/../_shared/aws.sh"
+REGION="${REGION:-us-east-1}"
+export AWS_DEFAULT_REGION="$REGION"
 
 # Per-account output filename (profile) — global service, region not part of identity.
-_TARGET_ID=$(printf '%s' "$PROFILE" | tr -c 'A-Za-z0-9._-' '_')
+_TARGET_ID="$(aws_target_id)"
 OUTPUT_JSON="$OUTPUT_DIR/aws_iam_users_groups_${_TARGET_ID}.json"
 _FETCHER_TMP_JSON="$(mktemp -t aws_iam_users_groups.XXXXXX.json)"
 _FAILURE_LOG="$(mktemp -t aws_iam_users_groups_fail.XXXXXX)"
@@ -27,7 +30,7 @@ trap 'rm -f "$_FETCHER_TMP_JSON" "$_FAILURE_LOG"' EXIT
 log_info() { printf '%s INFO aws_iam_users_groups %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 log_error() { printf '%s ERROR aws_iam_users_groups %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 
-CALLER_IDENTITY=$(aws sts get-caller-identity --profile "$PROFILE" --output json 2>/dev/null)
+CALLER_IDENTITY=$(aws sts get-caller-identity --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws sts get-caller-identity failed" >> "$_FAILURE_LOG"
     CALLER_IDENTITY='{"Account":"unknown","Arn":"unknown"}'
@@ -46,7 +49,7 @@ jq -n \
 
 # Get all IAM users
 log_info "Retrieving IAM users"
-users=$(aws iam list-users --profile "$PROFILE" --query 'Users[*].[UserName,CreateDate,PasswordLastUsed]' --output json 2>/dev/null)
+users=$(aws iam list-users --query 'Users[*].[UserName,CreateDate,PasswordLastUsed]' --output json 2>/dev/null)
 ec=$?
 if [ $ec -ne 0 ]; then
     echo "aws iam list-users failed (exit=$ec)" >> "$_FAILURE_LOG"
@@ -56,28 +59,28 @@ else
         username=$(echo "$user" | jq -r '.[0]')
 
         # Get user details
-        user_data=$(aws iam get-user --profile "$PROFILE" --user-name "$username" --query 'User' --output json 2>/dev/null)
+        user_data=$(aws iam get-user --user-name "$username" --query 'User' --output json 2>/dev/null)
         if [ $? -ne 0 ]; then
             echo "aws iam get-user ($username) failed" >> "$_FAILURE_LOG"
             continue
         fi
 
         # Get user groups
-        groups=$(aws iam list-groups-for-user --profile "$PROFILE" --user-name "$username" --query 'Groups[*].GroupName' --output json 2>/dev/null)
+        groups=$(aws iam list-groups-for-user --user-name "$username" --query 'Groups[*].GroupName' --output json 2>/dev/null)
         if [ $? -ne 0 ]; then
             echo "aws iam list-groups-for-user ($username) failed" >> "$_FAILURE_LOG"
             groups='[]'
         fi
 
         # Get access keys
-        access_keys=$(aws iam list-access-keys --profile "$PROFILE" --user-name "$username" --query 'AccessKeyMetadata[*].[AccessKeyId,Status,CreateDate]' --output json 2>/dev/null)
+        access_keys=$(aws iam list-access-keys --user-name "$username" --query 'AccessKeyMetadata[*].[AccessKeyId,Status,CreateDate]' --output json 2>/dev/null)
         if [ $? -ne 0 ]; then
             echo "aws iam list-access-keys ($username) failed" >> "$_FAILURE_LOG"
             access_keys='[]'
         fi
 
         # Get MFA devices
-        mfa_devices=$(aws iam list-mfa-devices --profile "$PROFILE" --user-name "$username" --query 'MFADevices[*].[SerialNumber,EnableDate]' --output json 2>/dev/null)
+        mfa_devices=$(aws iam list-mfa-devices --user-name "$username" --query 'MFADevices[*].[SerialNumber,EnableDate]' --output json 2>/dev/null)
         if [ $? -ne 0 ]; then
             echo "aws iam list-mfa-devices ($username) failed" >> "$_FAILURE_LOG"
             mfa_devices='[]'
@@ -86,7 +89,7 @@ else
         # Check for login profile. Absence (NoSuchEntity) is valid evidence
         # ("no console password"), not a collection failure -> not logged.
         has_login_profile=false
-        if aws iam get-login-profile --profile "$PROFILE" --user-name "$username" > /dev/null 2>&1; then
+        if aws iam get-login-profile --user-name "$username" > /dev/null 2>&1; then
             has_login_profile=true
         fi
 
@@ -113,7 +116,7 @@ fi
 
 # Get all IAM groups
 log_info "Retrieving IAM groups"
-groups=$(aws iam list-groups --profile "$PROFILE" --query 'Groups[*].[GroupName,CreateDate]' --output json 2>/dev/null)
+groups=$(aws iam list-groups --query 'Groups[*].[GroupName,CreateDate]' --output json 2>/dev/null)
 ec=$?
 if [ $ec -ne 0 ]; then
     echo "aws iam list-groups failed (exit=$ec)" >> "$_FAILURE_LOG"
@@ -123,14 +126,14 @@ else
         groupname=$(echo "$group" | jq -r '.[0]')
 
         # Get group details
-        group_data=$(aws iam get-group --profile "$PROFILE" --group-name "$groupname" --query 'Group' --output json 2>/dev/null)
+        group_data=$(aws iam get-group --group-name "$groupname" --query 'Group' --output json 2>/dev/null)
         if [ $? -ne 0 ]; then
             echo "aws iam get-group ($groupname) failed" >> "$_FAILURE_LOG"
             continue
         fi
 
         # Get group policies
-        policies=$(aws iam list-attached-group-policies --profile "$PROFILE" --group-name "$groupname" --query 'AttachedPolicies[*].[PolicyName,PolicyArn]' --output json 2>/dev/null)
+        policies=$(aws iam list-attached-group-policies --group-name "$groupname" --query 'AttachedPolicies[*].[PolicyName,PolicyArn]' --output json 2>/dev/null)
         if [ $? -ne 0 ]; then
             echo "aws iam list-attached-group-policies ($groupname) failed" >> "$_FAILURE_LOG"
             policies='[]'

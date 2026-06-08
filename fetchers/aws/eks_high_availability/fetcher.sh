@@ -2,7 +2,7 @@
 # AWS — EKS High Availability
 # Collects EKS clusters with subnet/AZ distribution and node-group configuration.
 # Output: $EVIDENCE_DIR/aws_eks_high_availability.json
-# Required env: AWS_PROFILE, AWS_DEFAULT_REGION
+# Optional env (else the AWS CLI ambient identity/region): AWS_PROFILE, AWS_DEFAULT_REGION
 # Required tools: aws, jq
 
 set -o pipefail
@@ -12,14 +12,14 @@ set -o pipefail
 OUTPUT_DIR="${EVIDENCE_DIR:-./evidence}"
 mkdir -p "$OUTPUT_DIR"
 
-if [ -z "${AWS_PROFILE:-}" ]; then echo "ERROR aws_eks_high_availability: AWS_PROFILE is not set" >&2; exit 1; fi
-if [ -z "${AWS_DEFAULT_REGION:-}" ]; then echo "ERROR aws_eks_high_availability: AWS_DEFAULT_REGION is not set" >&2; exit 1; fi
-
-PROFILE="$AWS_PROFILE"
-REGION="$AWS_DEFAULT_REGION"
+# Identity/region come from the AWS CLI credential chain. A manifest target may
+# set AWS_PROFILE/AWS_DEFAULT_REGION (multi-account / multi-region fanout); when
+# unset, the CLI uses the ambient identity/region. The helper sets PROFILE/REGION
+# (for metadata) and provides aws_target_id (for the output filename).
+source "$(dirname "$0")/../_shared/aws.sh"
 
 # Per-target output filename (profile+region) so multi-target runs don't overwrite.
-_TARGET_ID=$(printf '%s_%s' "$PROFILE" "$REGION" | tr -c 'A-Za-z0-9._-' '_')
+_TARGET_ID="$(aws_target_id "$REGION")"
 OUTPUT_JSON="$OUTPUT_DIR/aws_eks_high_availability_${_TARGET_ID}.json"
 _FETCHER_TMP_JSON="$(mktemp -t aws_eks_high_availability.XXXXXX.json)"
 _FAILURE_LOG="$(mktemp -t aws_eks_high_availability_fail.XXXXXX)"
@@ -28,7 +28,7 @@ trap 'rm -f "$_FETCHER_TMP_JSON" "$_FAILURE_LOG"' EXIT
 log_info() { printf '%s INFO aws_eks_high_availability %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 log_error() { printf '%s ERROR aws_eks_high_availability %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 
-CALLER_IDENTITY=$(aws sts get-caller-identity --profile "$PROFILE" --output json 2>/dev/null)
+CALLER_IDENTITY=$(aws sts get-caller-identity --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws sts get-caller-identity failed" >> "$_FAILURE_LOG"
     CALLER_IDENTITY='{"Account":"unknown","Arn":"unknown"}'
@@ -48,7 +48,7 @@ jq -n \
 log_info "Validating EKS Cluster Multi-AZ distribution"
 
 # Get list of EKS clusters
-clusters=$(aws eks list-clusters --profile "$PROFILE" --region "$REGION" --query "clusters" --output json 2>/dev/null)
+clusters=$(aws eks list-clusters --query "clusters" --output json 2>/dev/null)
 ec=$?
 if [ $ec -ne 0 ]; then
     echo "aws eks list-clusters failed (exit=$ec)" >> "$_FAILURE_LOG"
@@ -59,7 +59,7 @@ elif [ "$(echo "$clusters" | jq -r 'length')" -gt 0 ]; then
             log_info "Processing cluster: $cluster_name"
 
             # Get EKS cluster details
-            cluster_info=$(aws eks describe-cluster --profile "$PROFILE" --region "$REGION" --name "$cluster_name" --query 'cluster' --output json 2>/dev/null)
+            cluster_info=$(aws eks describe-cluster --name "$cluster_name" --query 'cluster' --output json 2>/dev/null)
             ec=$?
             if [ $ec -ne 0 ]; then
                 echo "aws eks describe-cluster ($cluster_name) failed (exit=$ec)" >> "$_FAILURE_LOG"
@@ -69,7 +69,7 @@ elif [ "$(echo "$clusters" | jq -r 'length')" -gt 0 ]; then
 
                 if [ -n "$subnet_ids" ]; then
                     # Get subnet details with AZs
-                    subnet_details=$(aws ec2 describe-subnets --profile "$PROFILE" --region "$REGION" --subnet-ids $subnet_ids --query 'Subnets[*].[SubnetId,AvailabilityZone,SubnetArn]' --output json 2>/dev/null)
+                    subnet_details=$(aws ec2 describe-subnets --subnet-ids $subnet_ids --query 'Subnets[*].[SubnetId,AvailabilityZone,SubnetArn]' --output json 2>/dev/null)
                     ec=$?
                     if [ $ec -ne 0 ]; then
                         echo "aws ec2 describe-subnets ($cluster_name) failed (exit=$ec)" >> "$_FAILURE_LOG"
@@ -77,7 +77,7 @@ elif [ "$(echo "$clusters" | jq -r 'length')" -gt 0 ]; then
                     fi
 
                     # Get node groups
-                    nodegroups=$(aws eks list-nodegroups --profile "$PROFILE" --region "$REGION" --cluster-name "$cluster_name" --query 'nodegroups[]' --output json 2>/dev/null)
+                    nodegroups=$(aws eks list-nodegroups --cluster-name "$cluster_name" --query 'nodegroups[]' --output json 2>/dev/null)
                     ec=$?
                     if [ $ec -ne 0 ]; then
                         echo "aws eks list-nodegroups ($cluster_name) failed (exit=$ec)" >> "$_FAILURE_LOG"
@@ -87,7 +87,7 @@ elif [ "$(echo "$clusters" | jq -r 'length')" -gt 0 ]; then
                     # Process each node group
                     echo "$nodegroups" | jq -r '.[]' 2>/dev/null | while read -r nodegroup; do
                         if [ -n "$nodegroup" ]; then
-                            nodegroup_info=$(aws eks describe-nodegroup --profile "$PROFILE" --region "$REGION" --cluster-name "$cluster_name" --nodegroup-name "$nodegroup" --query 'nodegroup' --output json 2>/dev/null)
+                            nodegroup_info=$(aws eks describe-nodegroup --cluster-name "$cluster_name" --nodegroup-name "$nodegroup" --query 'nodegroup' --output json 2>/dev/null)
                             ec=$?
                             if [ $ec -ne 0 ]; then
                                 echo "aws eks describe-nodegroup ($cluster_name/$nodegroup) failed (exit=$ec)" >> "$_FAILURE_LOG"

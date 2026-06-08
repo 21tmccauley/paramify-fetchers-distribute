@@ -21,7 +21,7 @@ run:
     - use: <fetcher_name>
       config: { ... }        # optional; per-fetcher config, overrides platform config
       secrets: { ... }       # required when fetcher declares non-per_target secrets
-      targets: [ ... ]       # required iff fetcher declares supports_targets: true
+      targets: [ ... ]       # required only when a target field is required (see below)
 ```
 
 The runner walks `run.fetchers[]` and invokes each in order. v0.x is serial — no parallelism, no `depends_on` ordering, no retries.
@@ -35,7 +35,7 @@ The runner walks `run.fetchers[]` and invokes each in order. v0.x is serial — 
 | `use` | always | Matches the `name` field in a discovered `fetcher.yaml` |
 | `config` | optional | Config values for this fetcher. The runner injects each key declared in the fetcher's (or its category's) `config_schema` as the env var named there. Overrides platform config. |
 | `secrets` | fetcher has non-`per_target` secrets | Map of `<secret_name>: <reference>` |
-| `targets` | fetcher has `supports_targets: true` | Array of target entries |
+| `targets` | fetcher has at least one **required** target field | Array of target entries. A `supports_targets` fetcher whose target fields are ALL optional may omit `targets[]` — the runner then does a single ambient invocation ("collect where deployed"). All 30 AWS fetchers are this all-optional case. |
 
 ---
 
@@ -159,7 +159,7 @@ Each evidence file is wrapped by the runner in the standard envelope —
 (`fetcher_name`, `fetcher_version`, `category`, `run_id`, `target`,
 `collected_at`, `status`, `exit_code`, plus the fetcher's `evidence_set` block
 when present) and `payload` is the fetcher's raw output. Failed invocations also
-carry a `stderr_tail` in the metadata. `_run_metadata.json` is the run-level
+carry an `error` in the metadata. `_run_metadata.json` is the run-level
 index and is not itself enveloped. See [`envelope_design.md`](envelope_design.md).
 
 ---
@@ -173,7 +173,6 @@ Written at the end of every run. Captures what ran, when, how long, what came ou
   "run_id": "2026-05-27T14-36-46Z",
   "started_at": "2026-05-27T14:36:46Z",
   "completed_at": "2026-05-27T14:36:46Z",
-  "manifest_path": "/abs/path/to/manifest.yaml",
   "invocations": [
     {
       "fetcher_name": "okta_phishing_resistant_mfa",
@@ -271,7 +270,7 @@ resolves it from its own environment at run time.
 
 - Manifest passes its JSON schema
 - Every `use:` matches a discovered fetcher
-- Single-target manifests don't supply `targets[]`; fanout manifests do
+- `targets[]` is supplied only when the fetcher has at least one required target field; a `supports_targets` fetcher whose target fields are all optional may omit `targets[]` (the runner does a single ambient invocation)
 - Every declared secret (per fetcher + per target) has a corresponding entry in the manifest
 
 `validate` does NOT check whether `${env:...}` references resolve at runtime — that's discovered only at `run` time, with a structured error per failing invocation.

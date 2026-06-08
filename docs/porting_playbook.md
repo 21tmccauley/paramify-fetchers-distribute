@@ -303,8 +303,8 @@ A direct invocation writes the raw evidence dict your fetcher produces. A run
 through the runner wraps each output file in an envelope
 (`{schema_version, metadata, payload}`) — `metadata` carries
 `fetcher_name`/`version`/`category`/`run_id`/`target`/`collected_at`/`status`/
-`exit_code` plus your `evidence_set`, and failed invocations get a
-`stderr_tail`. Outputs land in `<output_dir>/run-<UTC-timestamp>/` alongside a
+`exit_code` plus your `evidence_set`, and failed invocations get an
+`error` (stderr tail). Outputs land in `<output_dir>/run-<UTC-timestamp>/` alongside a
 `_run_metadata.json` index (the index itself is not enveloped). Confirm the
 JSON lands and both the payload and the envelope metadata look sane.
 
@@ -391,12 +391,15 @@ These are tracked, not surprises. Don't try to fix them mid-port:
 
 ## AWS fanout shape
 
-All 30 AWS fetchers are fanout. AWS auth is a named profile (a `~/.aws`
-profile), so `profile` is a required `target_schema` field on every AWS
-fetcher. There are three flavors:
+All 30 AWS fetchers are fanout, but `profile` and `region` are OPTIONAL
+`target_schema` fields on every AWS fetcher. Omit them — or omit `targets[]`
+entirely — and the fetcher collects the ambient account/region via the AWS CLI
+credential chain ("collect where deployed"); set `profile:`/`region:` per
+target for multi-account / multi-region assume-role fanout, where a target's
+values override the ambient defaults. There are three flavors:
 
-- **Regional (22 fetchers)** — `target_schema` is `{region required, profile
-  required}`; the runner invokes the fetcher once per `(region, profile)`
+- **Regional (22 fetchers)** — `target_schema` is `{region optional, profile
+  optional}`; the runner invokes the fetcher once per `(region, profile)`
   target and the output filename is `aws_<short>_<profile>_<region>.json`.
 - **Global → profile-only fanout (5 fetchers)** — `iam_roles`, `iam_policies`,
   `iam_users_groups`, `route53_high_availability`, `s3_encryption_status`.
@@ -420,6 +423,4 @@ When in doubt, mirror the shape of one of these:
 | Single-target Python (self-contained, no shared module) | [`fetchers/sentinelone/agents/`](../fetchers/sentinelone/agents/) |
 | Single-target bash (curl + jq with failure tracking) | [`fetchers/okta/authenticators/`](../fetchers/okta/authenticators/) |
 | Fanout Python (per-target secrets + per-target config fields) | [`fetchers/gitlab/ci_cd_pipeline_config/`](../fetchers/gitlab/ci_cd_pipeline_config/) |
-| Fanout AWS (region+profile target, named profile auth) | [`fetchers/aws/`](../fetchers/aws/) |
-
-For the AI-followable strict-imperative recipe, see [`ai_port_recipe.md`](ai_port_recipe.md).
+| Fanout AWS (optional region+profile target, ambient creds by default) | [`fetchers/aws/`](../fetchers/aws/) |

@@ -106,7 +106,12 @@ generalization of fanout's per-target env injection, not a new subsystem.
 list and adds those specific vars to `_INHERITED_ENV_VARS` for that invocation.
 This keeps the env minimal-by-default while supporting profile, env-key, and
 ambient (IRSA / instance-role) auth — secrets stay source-agnostic (`.env`,
-cloud secret provider, or ambient cloud identity).
+cloud secret provider, or ambient cloud identity). The AWS category passthrough
+includes the standard cred/region vars (`AWS_PROFILE`, `AWS_DEFAULT_REGION`,
+`AWS_REGION`, `AWS_ACCESS_KEY_ID`/`SECRET`/`SESSION_TOKEN`, `AWS_CONFIG_FILE`,
+`AWS_SHARED_CREDENTIALS_FILE`) so the **ambient** path (no manifest profile/region
+→ the AWS CLI's own chain) works locally and in-cluster; a target's profile/region
+still override these (config/passthrough applied first, target fields last).
 
 ---
 

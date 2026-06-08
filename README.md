@@ -190,8 +190,8 @@ Directories starting with `_` are not fetchers — the runner skips them.
 
 ## Adding a new fetcher
 
-The mechanical, copy-paste version with verify commands is
-[`docs/ai_port_recipe.md`](docs/ai_port_recipe.md); the narrative version with
+The mechanical, step-by-step version with verify commands is
+[`docs/porting_playbook.md`](docs/porting_playbook.md); the narrative version with
 rationale is [`docs/authoring_a_fetcher.md`](docs/authoring_a_fetcher.md). The
 short path:
 
@@ -326,13 +326,16 @@ runner iterates, sets per-target env vars, runs the entry once per target, and
 isolates failures so one bad target doesn't sink the rest. Worked example:
 [`fetchers/gitlab/ci_cd_pipeline_config/`](fetchers/gitlab/ci_cd_pipeline_config/).
 
-All 30 AWS fetchers fan out. Most are **regional** — their `target_schema` takes
-a required `region` and `profile` (a named `~/.aws` profile), runs once per
-`(region, profile)` pair, and writes `aws_<short>_<profile>_<region>.json`. Five
-are **global** and fan out by profile only (`region` optional, defaults
-`us-east-1`, output `aws_<short>_<profile>.json`): `iam_roles`, `iam_policies`,
-`iam_users_groups`, `route53_high_availability`, `s3_encryption_status`. A few
-are mixed-scope and documented as such. AWS auth is the named profile;
+All 30 AWS fetchers fan out, but `profile` and `region` are **optional**. Omit
+them — or omit `targets[]` entirely — and the fetcher collects the **ambient**
+account/region via the AWS CLI credential chain ("collect where deployed").
+Set `profile:`/`region:` per target for multi-account / multi-region
+assume-role fanout; a target's values override the ambient defaults. With a
+`profile` set, regional fetchers run once per `(region, profile)` pair and write
+`aws_<short>_<profile>_<region>.json`. Five are **global** and fan out by profile
+only (`region` defaults `us-east-1`, output `aws_<short>_<profile>.json`):
+`iam_roles`, `iam_policies`, `iam_users_groups`, `route53_high_availability`,
+`s3_encryption_status`. A few are mixed-scope and documented as such.
 `_categories/aws.yaml` (and `k8s.yaml`) carry `auth.passthrough_env` to let
 ambient IRSA / instance-role vars through the env whitelist.
 
@@ -371,7 +374,7 @@ managers, or ambient cloud identity) flows — is in
 |---|---|
 | [`docs/fetcher_contract.md`](docs/fetcher_contract.md) | The binding runner↔fetcher contract |
 | [`docs/authoring_a_fetcher.md`](docs/authoring_a_fetcher.md) | Writing a new fetcher from scratch (narrative) |
-| [`docs/ai_port_recipe.md`](docs/ai_port_recipe.md) | Strict step-by-step checklist with verify commands |
+| [`docs/porting_playbook.md`](docs/porting_playbook.md) | Strict step-by-step port checklist with verify commands |
 | [`docs/run_manifest_reference.md`](docs/run_manifest_reference.md) | Manifest format |
 | [`docs/config_injection_design.md`](docs/config_injection_design.md) | Platform/config/auth model |
 | [`docs/design.md`](docs/design.md) | Why the framework is shaped this way |

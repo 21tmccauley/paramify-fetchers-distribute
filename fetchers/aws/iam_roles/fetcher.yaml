@@ -29,9 +29,9 @@ target_schema:
     description: Optional. Global service — only sets the API endpoint region, does not scope results.
   profile:
     type: string
-    required: true
+    required: false
     env: AWS_PROFILE
-    description: AWS named profile (credentials resolved from ~/.aws / SSO).
+    description: Optional. AWS named profile for multi-account fanout; falls back to the ambient identity (IRSA / instance role / SSO / env) when omitted.
 
 secrets: []
 

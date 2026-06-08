@@ -8,7 +8,11 @@ that get uploaded to Paramify.
 ## Current state
 Pre-1.0. 58 fetchers ported across 8 categories (aws 30, okta 8, sentinelone 5,
 knowbe4 4, gitlab 3, k8s 3, rippling 3, checkov 2); the AWS category is complete
-and all 30 are region/profile fanout. Every fetcher carries an `evidence_set` block
+and all 30 are region/profile fanout where `profile` and `region` are OPTIONAL —
+omit targets (or omit profile/region on a target) and the fetcher collects the
+ambient account/region via the AWS CLI credential chain ("collect where
+deployed"); set a `profile:` per target for multi-account assume-role fanout.
+Every fetcher carries an `evidence_set` block
 (reference_id/name/instructions) in its `fetcher.yaml`. v0.x runner built
 (`framework/runner/`); manifest format settled (see `examples/minimal_run.yaml`).
 Ported fetchers are version 0.x and write raw evidence payloads; the runner
@@ -54,6 +58,14 @@ config). `auth.passthrough_env` lets ambient cloud-identity vars (e.g. IRSA)
 through the runner's minimal env whitelist. Every env var a fetcher reads must
 be declared as a secret OR a config field, else the runner strips it. See
 `docs/config_injection_design.md`.
+
+A `supports_targets` fetcher whose target fields are ALL optional may have no
+`targets[]` — the runner then does one invocation with `target=None` (ambient).
+If any target field is `required`, missing targets is still an error. The AWS
+category passthrough now includes the standard cred/region vars
+(`AWS_PROFILE`/`AWS_DEFAULT_REGION`/`AWS_ACCESS_KEY_ID`/… in
+`fetchers/_categories/aws.yaml`) so the ambient path works; a target's
+profile/region still override them.
 
 ## Front-ends & API facade
 `framework/api.py` is the single facade — discovery, manifest editing,

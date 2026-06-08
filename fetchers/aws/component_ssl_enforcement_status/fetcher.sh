@@ -3,7 +3,7 @@
 # Checks S3 bucket policies for an aws:SecureTransport HTTPS-deny statement and
 # RDS DB parameter groups for rds.force_ssl=1.
 # Output: $EVIDENCE_DIR/aws_component_ssl_enforcement_status.json
-# Required env: AWS_PROFILE, AWS_DEFAULT_REGION
+# Optional env (else the AWS CLI ambient identity/region): AWS_PROFILE, AWS_DEFAULT_REGION
 # Required tools: aws, jq
 
 set -o pipefail
@@ -13,14 +13,14 @@ set -o pipefail
 OUTPUT_DIR="${EVIDENCE_DIR:-./evidence}"
 mkdir -p "$OUTPUT_DIR"
 
-if [ -z "${AWS_PROFILE:-}" ]; then echo "ERROR aws_component_ssl_enforcement_status: AWS_PROFILE is not set" >&2; exit 1; fi
-if [ -z "${AWS_DEFAULT_REGION:-}" ]; then echo "ERROR aws_component_ssl_enforcement_status: AWS_DEFAULT_REGION is not set" >&2; exit 1; fi
-
-PROFILE="$AWS_PROFILE"
-REGION="$AWS_DEFAULT_REGION"
+# Identity/region come from the AWS CLI credential chain. A manifest target may
+# set AWS_PROFILE/AWS_DEFAULT_REGION (multi-account / multi-region fanout); when
+# unset, the CLI uses the ambient identity/region. The helper sets PROFILE/REGION
+# (for metadata) and provides aws_target_id (for the output filename).
+source "$(dirname "$0")/../_shared/aws.sh"
 
 # Per-target output filename (profile+region) so multi-target runs don't overwrite.
-_TARGET_ID=$(printf '%s_%s' "$PROFILE" "$REGION" | tr -c 'A-Za-z0-9._-' '_')
+_TARGET_ID="$(aws_target_id "$REGION")"
 OUTPUT_JSON="$OUTPUT_DIR/aws_component_ssl_enforcement_status_${_TARGET_ID}.json"
 _FETCHER_TMP_JSON="$(mktemp -t aws_component_ssl_enforcement_status.XXXXXX.json)"
 _S3_DETAILS="$(mktemp -t aws_component_ssl_enforcement_status_s3.XXXXXX.json)"
@@ -31,7 +31,7 @@ trap 'rm -f "$_FETCHER_TMP_JSON" "$_S3_DETAILS" "$_RDS_DETAILS" "$_FAILURE_LOG"'
 log_info() { printf '%s INFO aws_component_ssl_enforcement_status %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 log_error() { printf '%s ERROR aws_component_ssl_enforcement_status %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 
-CALLER_IDENTITY=$(aws sts get-caller-identity --profile "$PROFILE" --output json 2>/dev/null)
+CALLER_IDENTITY=$(aws sts get-caller-identity --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws sts get-caller-identity failed" >> "$_FAILURE_LOG"
     CALLER_IDENTITY='{"Account":"unknown","Arn":"unknown"}'
@@ -51,7 +51,7 @@ jq -n \
 # --- per-script data collection (ported from upstream) ---
 
 # 1. S3 Bucket SSL Enforcement
-s3_buckets=$(aws s3api list-buckets --profile "$PROFILE" --region "$REGION" 2>/dev/null | jq -r '.Buckets[].Name')
+s3_buckets=$(aws s3api list-buckets 2>/dev/null | jq -r '.Buckets[].Name')
 ec=$?
 if [ $ec -ne 0 ]; then
     echo "aws s3api list-buckets failed (exit=$ec)" >> "$_FAILURE_LOG"
@@ -65,7 +65,7 @@ for bucket in $s3_buckets; do
     s3_total=$((s3_total+1))
     # get-bucket-policy errors (NoSuchBucketPolicy) when a bucket has no policy;
     # upstream treats that as valid evidence (ssl not enforced), not a failure.
-    policy=$(aws s3api get-bucket-policy --bucket "$bucket" --profile "$PROFILE" --region "$REGION" 2>/dev/null || echo "")
+    policy=$(aws s3api get-bucket-policy --bucket "$bucket" 2>/dev/null || echo "")
     enforced="false"
     snippet=""
     if [[ -n "$policy" ]]; then
@@ -87,7 +87,7 @@ done
 jq --slurpfile s3 "$_S3_DETAILS" '.results.s3 = $s3[0]' "$OUTPUT_JSON" > "$_FETCHER_TMP_JSON" && mv "$_FETCHER_TMP_JSON" "$OUTPUT_JSON"
 
 # 2. RDS SSL Enforcement
-rds_instances=$(aws rds describe-db-instances --profile "$PROFILE" --region "$REGION" 2>/dev/null | jq -r '.DBInstances[].DBInstanceIdentifier')
+rds_instances=$(aws rds describe-db-instances 2>/dev/null | jq -r '.DBInstances[].DBInstanceIdentifier')
 ec=$?
 if [ $ec -ne 0 ]; then
     echo "aws rds describe-db-instances failed (exit=$ec)" >> "$_FAILURE_LOG"
@@ -99,14 +99,14 @@ echo "[]" > "$_RDS_DETAILS"
 
 for db in $rds_instances; do
     rds_total=$((rds_total+1))
-    pgroups=$(aws rds describe-db-instances --db-instance-identifier "$db" --profile "$PROFILE" --region "$REGION" 2>/dev/null | jq -r '.DBInstances[0].DBParameterGroups[].DBParameterGroupName')
+    pgroups=$(aws rds describe-db-instances --db-instance-identifier "$db" 2>/dev/null | jq -r '.DBInstances[0].DBParameterGroups[].DBParameterGroupName')
     ec=$?
     if [ $ec -ne 0 ]; then
         echo "aws rds describe-db-instances ($db) failed (exit=$ec)" >> "$_FAILURE_LOG"
     fi
     enforced="false"
     for pg in $pgroups; do
-        param=$(aws rds describe-db-parameters --db-parameter-group-name "$pg" --profile "$PROFILE" --region "$REGION" 2>/dev/null | jq -r '.Parameters[] | select(.ParameterName=="rds.force_ssl") | .ParameterValue')
+        param=$(aws rds describe-db-parameters --db-parameter-group-name "$pg" 2>/dev/null | jq -r '.Parameters[] | select(.ParameterName=="rds.force_ssl") | .ParameterValue')
         ec=$?
         if [ $ec -ne 0 ]; then
             echo "aws rds describe-db-parameters ($pg) failed (exit=$ec)" >> "$_FAILURE_LOG"

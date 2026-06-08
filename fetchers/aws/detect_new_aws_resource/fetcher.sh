@@ -4,7 +4,7 @@
 # New_AWS_Resource_Launch_Detected SNS topic/subscriptions, and that the
 # monitoring interval is 5 minutes or less.
 # Output: $EVIDENCE_DIR/aws_detect_new_aws_resource.json
-# Required env: AWS_PROFILE, AWS_DEFAULT_REGION
+# Optional env (else the AWS CLI ambient identity/region): AWS_PROFILE, AWS_DEFAULT_REGION
 # Required tools: aws, jq
 
 set -o pipefail
@@ -14,14 +14,14 @@ set -o pipefail
 OUTPUT_DIR="${EVIDENCE_DIR:-./evidence}"
 mkdir -p "$OUTPUT_DIR"
 
-if [ -z "${AWS_PROFILE:-}" ]; then echo "ERROR aws_detect_new_aws_resource: AWS_PROFILE is not set" >&2; exit 1; fi
-if [ -z "${AWS_DEFAULT_REGION:-}" ]; then echo "ERROR aws_detect_new_aws_resource: AWS_DEFAULT_REGION is not set" >&2; exit 1; fi
-
-PROFILE="$AWS_PROFILE"
-REGION="$AWS_DEFAULT_REGION"
+# Identity/region come from the AWS CLI credential chain. A manifest target may
+# set AWS_PROFILE/AWS_DEFAULT_REGION (multi-account / multi-region fanout); when
+# unset, the CLI uses the ambient identity/region. The helper sets PROFILE/REGION
+# (for metadata) and provides aws_target_id (for the output filename).
+source "$(dirname "$0")/../_shared/aws.sh"
 
 # Per-target output filename (profile+region) so multi-target runs don't overwrite.
-_TARGET_ID=$(printf '%s_%s' "$PROFILE" "$REGION" | tr -c 'A-Za-z0-9._-' '_')
+_TARGET_ID="$(aws_target_id "$REGION")"
 OUTPUT_JSON="$OUTPUT_DIR/aws_detect_new_aws_resource_${_TARGET_ID}.json"
 _FETCHER_TMP_JSON="$(mktemp -t aws_detect_new_aws_resource.XXXXXX.json)"
 _FAILURE_LOG="$(mktemp -t aws_detect_new_aws_resource_fail.XXXXXX)"
@@ -30,7 +30,7 @@ trap 'rm -f "$_FETCHER_TMP_JSON" "$_FAILURE_LOG"' EXIT
 log_info() { printf '%s INFO aws_detect_new_aws_resource %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 log_error() { printf '%s ERROR aws_detect_new_aws_resource %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 
-CALLER_IDENTITY=$(aws sts get-caller-identity --profile "$PROFILE" --output json 2>/dev/null)
+CALLER_IDENTITY=$(aws sts get-caller-identity --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws sts get-caller-identity failed" >> "$_FAILURE_LOG"
     CALLER_IDENTITY='{"Account":"unknown","Arn":"unknown"}'
@@ -49,17 +49,17 @@ jq -n \
 
 # 1. Check AWS Config setup. Empty arrays are valid evidence (not configured).
 log_info "Checking AWS Config setup"
-config_recorders=$(aws configservice describe-configuration-recorders --profile "$PROFILE" --region "$REGION" --query 'ConfigurationRecorders[*]' --output json 2>/dev/null)
+config_recorders=$(aws configservice describe-configuration-recorders --query 'ConfigurationRecorders[*]' --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws configservice describe-configuration-recorders failed" >> "$_FAILURE_LOG"
     config_recorders='[]'
 fi
-recorder_status=$(aws configservice describe-configuration-recorder-status --profile "$PROFILE" --region "$REGION" --query 'ConfigurationRecordersStatus[*]' --output json 2>/dev/null)
+recorder_status=$(aws configservice describe-configuration-recorder-status --query 'ConfigurationRecordersStatus[*]' --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws configservice describe-configuration-recorder-status failed" >> "$_FAILURE_LOG"
     recorder_status='[]'
 fi
-delivery_channels=$(aws configservice describe-delivery-channels --profile "$PROFILE" --region "$REGION" --query 'DeliveryChannels[*]' --output json 2>/dev/null)
+delivery_channels=$(aws configservice describe-delivery-channels --query 'DeliveryChannels[*]' --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws configservice describe-delivery-channels failed" >> "$_FAILURE_LOG"
     delivery_channels='[]'
@@ -76,7 +76,7 @@ jq --argjson recorders "$config_recorders" \
 
 # 2. Check EventBridge rule for new resource detection.
 log_info "Checking EventBridge rules"
-rules=$(aws events list-rules --profile "$PROFILE" --region "$REGION" --name "New-Resource-Launched-Alert-Rule" --query 'Rules[*]' --output json 2>/dev/null)
+rules=$(aws events list-rules --name "New-Resource-Launched-Alert-Rule" --query 'Rules[*]' --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws events list-rules failed" >> "$_FAILURE_LOG"
     rules='[]'
@@ -88,14 +88,14 @@ if [ "$(echo "$rules" | jq 'length')" -gt 0 ]; then
         rule_name=$(echo "$rule" | jq -r '.Name')
 
         # Get rule targets
-        targets=$(aws events list-targets-by-rule --profile "$PROFILE" --region "$REGION" --rule "$rule_name" --query 'Targets[*]' --output json 2>/dev/null)
+        targets=$(aws events list-targets-by-rule --rule "$rule_name" --query 'Targets[*]' --output json 2>/dev/null)
         if [ $? -ne 0 ]; then
             echo "aws events list-targets-by-rule ($rule_name) failed" >> "$_FAILURE_LOG"
             targets='[]'
         fi
 
         # Get rule details including schedule
-        rule_details=$(aws events describe-rule --profile "$PROFILE" --region "$REGION" --name "$rule_name" --output json 2>/dev/null)
+        rule_details=$(aws events describe-rule --name "$rule_name" --output json 2>/dev/null)
         if [ $? -ne 0 ]; then
             echo "aws events describe-rule ($rule_name) failed" >> "$_FAILURE_LOG"
             rule_details='{}'
@@ -118,7 +118,7 @@ fi
 
 # 3. Check SNS topics and subscriptions.
 log_info "Checking SNS topics"
-topics=$(aws sns list-topics --profile "$PROFILE" --region "$REGION" --query 'Topics[*]' --output json 2>/dev/null)
+topics=$(aws sns list-topics --query 'Topics[*]' --output json 2>/dev/null)
 if [ $? -ne 0 ]; then
     echo "aws sns list-topics failed" >> "$_FAILURE_LOG"
     topics='[]'
@@ -132,7 +132,7 @@ if [ "$(echo "$topics" | jq 'length')" -gt 0 ]; then
 
         # Only process the specific topic
         if [[ "$topic_name" == "New_AWS_Resource_Launch_Detected" ]]; then
-            subscriptions=$(aws sns list-subscriptions-by-topic --profile "$PROFILE" --region "$REGION" --topic-arn "$topic_arn" --query 'Subscriptions[*]' --output json 2>/dev/null)
+            subscriptions=$(aws sns list-subscriptions-by-topic --topic-arn "$topic_arn" --query 'Subscriptions[*]' --output json 2>/dev/null)
             if [ $? -ne 0 ]; then
                 echo "aws sns list-subscriptions-by-topic ($topic_name) failed" >> "$_FAILURE_LOG"
                 subscriptions='[]'

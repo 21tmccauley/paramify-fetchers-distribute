@@ -350,15 +350,29 @@ def _invocation_record(r) -> dict:
     return record
 
 
+def _manifest_id(path, root: Path) -> str:
+    """Stable identity for a manifest in run metadata: its path relative to the
+    repo root (so attribution survives the repo moving), absolute otherwise."""
+    p = Path(path).resolve()
+    try:
+        return str(p.relative_to(Path(root).resolve()))
+    except ValueError:
+        return str(p)
+
+
 def run(
     manifest: dict,
     root: Path,
     on_event: Optional[Callable[[dict], None]] = None,
+    manifest_path: Optional[Path] = None,
 ) -> dict:
     """Execute a manifest. Wraps each output in the evidence envelope and writes
     _run_metadata.json (unchanged from the original CLI run). Fires on_event for
     run_start / fetcher_start / fetcher_skip / log_line / fetcher_result /
     fetcher_error / run_complete so a UI can stream live progress.
+
+    Pass manifest_path so the run metadata records which manifest produced the
+    run — that attribution powers each manifest's last_run in list_manifests().
 
     Returns a summary dict. Raises ValueError if the manifest is schema-invalid.
     """
@@ -440,6 +454,7 @@ def run(
     completed_at = _iso_now()
     metadata = {
         "run_id": run_id,
+        "manifest": _manifest_id(manifest_path, root) if manifest_path else None,
         "started_at": started_at,
         "completed_at": completed_at,
         "invocations": [_invocation_record(r) for r in all_results],
@@ -466,7 +481,7 @@ def run(
 
 def _run_summary(run_dir: Path) -> dict:
     """Summarize one run-* directory from its _run_metadata.json + output files."""
-    started = completed = None
+    started = completed = manifest_src = None
     invocations: list = []
     meta_path = run_dir / "_run_metadata.json"
     complete = meta_path.exists()
@@ -475,6 +490,7 @@ def _run_summary(run_dir: Path) -> dict:
             meta = json.loads(meta_path.read_text())
             started = meta.get("started_at")
             completed = meta.get("completed_at")
+            manifest_src = meta.get("manifest")
             invocations = meta.get("invocations") or []
         except (OSError, json.JSONDecodeError):
             pass
@@ -502,6 +518,7 @@ def _run_summary(run_dir: Path) -> dict:
     return {
         "run_id": name[len("run-"):] if name.startswith("run-") else name,
         "dir": str(run_dir),
+        "manifest": manifest_src,  # _manifest_id of the producing manifest; None = unattributed
         "started_at": started,
         "completed_at": completed,
         "complete": complete,  # False = no _run_metadata.json (run aborted before finishing)
@@ -588,10 +605,14 @@ def _manifest_summary(path: Path, root: Path, fetchers=None, platforms=None) -> 
     except Exception:
         pass
     try:
-        # NOTE: last_run is read from the manifest's output_dir; manifests that
-        # share an output_dir (e.g. the default ./evidence) will report the same
-        # last run, since run metadata doesn't record which manifest produced it.
-        runs = list_runs(run.get("output_dir") or "./evidence")
+        # last_run: the newest run in the manifest's output_dir that THIS
+        # manifest produced (run metadata records its _manifest_id). Runs
+        # without attribution — predating that field, or another manifest
+        # sharing the output_dir — don't count, so a manifest stays "never
+        # run" until it is run again.
+        mid = _manifest_id(path, root)
+        runs = [r for r in list_runs(run.get("output_dir") or "./evidence")
+                if r.get("manifest") == mid]
         if runs:
             last = runs[0]
             total = last["ok"] + last["fail"]

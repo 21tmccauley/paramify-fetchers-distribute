@@ -130,12 +130,16 @@ class RunPage(Vertical):
         self._refresh_summary()
         # Snapshot the manifest: the worker runs on another thread and the
         # Manifest tab can mutate the shared dict on the UI thread mid-run.
-        self._run_worker(deepcopy(self.app.manifest), self.app.root_path)
+        self._run_worker(deepcopy(self.app.manifest), self.app.root_path, self.app.manifest_path)
 
     @work(thread=True, exclusive=True)
-    def _run_worker(self, manifest: dict, root) -> None:
+    def _run_worker(self, manifest: dict, root, manifest_path=None) -> None:
         try:
-            api.run(manifest, root, on_event=lambda ev: self.post_message(RunEvent(ev)))
+            api.run(
+                manifest, root,
+                on_event=lambda ev: self.post_message(RunEvent(ev)),
+                manifest_path=manifest_path,
+            )
         except Exception as exc:  # e.g. schema-invalid manifest -> ValueError
             self.post_message(RunEvent({"event": "_run_failed", "error": str(exc)}))
 

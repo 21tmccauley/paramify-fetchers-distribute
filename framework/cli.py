@@ -384,7 +384,11 @@ def run_cmd(
             _err(f"Setup failed: {e}")
         raise typer.Exit(1)
     try:
-        summary = api.run(m, root, on_event=None if json_out else _human_run_printer())
+        summary = api.run(
+            m, root,
+            on_event=None if json_out else _human_run_printer(),
+            manifest_path=Path(manifest).resolve(),
+        )
     except (ValueError, RuntimeError) as e:
         if json_out:
             typer.echo(json.dumps({"ok": False, "error": str(e)}, indent=2))

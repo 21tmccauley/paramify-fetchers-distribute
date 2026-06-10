@@ -5,6 +5,3 @@ run:
     secrets:
       api_key: ${env:KNOWBE4_API_KEY}
       region: ${env:KNOWBE4_REGION}
-  - use: azure_storage_encryption_status
-    targets:
-    - subscription: REPLACE_WITH_SUBSCRIPTION_ID

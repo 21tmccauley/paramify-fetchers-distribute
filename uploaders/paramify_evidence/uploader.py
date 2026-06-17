@@ -24,7 +24,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
 import requests
@@ -208,6 +208,206 @@ def load_config(path: Optional[str]) -> Dict:
     return data or {}
 
 
+def _emit(on_event: Optional[Callable[[dict], None]], event: dict) -> None:
+    if on_event is not None:
+        on_event(event)
+
+
+def _base_url_error(base_url: str) -> Optional[str]:
+    parsed = urlparse(base_url)
+    if parsed.scheme != "https" and (parsed.hostname or "") not in ("localhost", "127.0.0.1", "::1"):
+        return (
+            "base_url must be https to protect the API token "
+            f"(got {base_url!r}); only localhost may use http"
+        )
+    return None
+
+
+def upload_run(
+    run_dir: Path,
+    *,
+    config: Optional[Dict] = None,
+    token: Optional[str] = None,
+    base_url: Optional[str] = None,
+    dry_run: bool = False,
+    on_event: Optional[Callable[[dict], None]] = None,
+) -> Dict:
+    """Upload one completed run directory.
+
+    The standalone CLI still logs to stderr, while front-ends can pass on_event
+    to render upload_start / upload_file / upload_complete in their own UI.
+    """
+    load_dotenv()
+    config = config or {}
+    paramify_cfg = config.get("paramify") or {}
+    base_url = paramify_cfg.get("base_url") or base_url or os.environ.get("PARAMIFY_API_BASE_URL") or DEFAULT_BASE_URL
+
+    url_error = _base_url_error(base_url)
+    if url_error:
+        logger.error(url_error)
+        raise ValueError(url_error)
+
+    overrides = config.get("overrides") or {}
+    skip_failed = bool(config.get("skip_failed", False))
+    artifact_payload = config.get("artifact_payload", "envelope")
+    if artifact_payload not in ("envelope", "payload"):
+        msg = f"artifact_payload must be 'envelope' or 'payload', got {artifact_payload!r}"
+        logger.error(msg)
+        raise ValueError(msg)
+
+    run_dir = Path(run_dir)
+    if not run_dir.is_dir():
+        msg = f"No run directory to upload: {run_dir}"
+        logger.error(msg)
+        raise ValueError(msg)
+
+    token = token or os.environ.get("PARAMIFY_UPLOAD_API_TOKEN")
+    if not token and not dry_run:
+        msg = "PARAMIFY_UPLOAD_API_TOKEN is not set"
+        logger.error(msg)
+        raise ValueError(msg)
+
+    files = list(iter_evidence_files(run_dir))
+    logger.info("Uploading evidence from %s%s", run_dir, " (dry-run)" if dry_run else "")
+    _emit(on_event, {
+        "event": "upload_start",
+        "run_dir": str(run_dir),
+        "base_url": base_url,
+        "dry_run": dry_run,
+        "files": len(files),
+    })
+
+    client = None if dry_run else ParamifyClient(token, base_url)
+    results: List[Dict] = []
+    uploaded = skipped_dup = skipped_failed = errors = seen = 0
+
+    def add_result(result: Dict) -> None:
+        results.append(result)
+        _emit(on_event, {"event": "upload_file", **result})
+
+    for path in files:
+        seen += 1
+        try:
+            envelope = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            logger.error("%s: cannot read as JSON (%s)", path.name, e)
+            errors += 1
+            add_result({"file": path.name, "outcome": "error", "reason": f"cannot read as JSON ({e})"})
+            continue
+
+        # Per-file isolation: one bad file (malformed envelope, API error, etc.)
+        # must never abort the batch — the uploader processes arbitrary run dirs.
+        try:
+            if not is_enveloped(envelope):
+                logger.error("%s: not envelope-wrapped (no metadata/payload); skipping", path.name)
+                errors += 1
+                add_result({"file": path.name, "outcome": "error", "reason": "not envelope-wrapped"})
+                continue
+
+            metadata = envelope["metadata"]
+            es = resolve_evidence_set(metadata, overrides)
+            if not es or not es.get("reference_id") or not es.get("name"):
+                logger.error(
+                    "%s: evidence_set missing or incomplete (need reference_id and name); skipping",
+                    path.name,
+                )
+                errors += 1
+                add_result({"file": path.name, "outcome": "error", "reason": "missing/incomplete evidence_set"})
+                continue
+
+            if metadata.get("status") == "failed" and skip_failed:
+                logger.info("%s: status=failed and skip_failed set; skipping", path.name)
+                skipped_failed += 1
+                add_result({"file": path.name, "outcome": "skipped_failed", "reference_id": es["reference_id"]})
+                continue
+
+            meta_art = build_artifact_meta(metadata, es["name"])
+
+            if dry_run:
+                logger.info(
+                    "would upload %s → set %s (%s) as %r",
+                    path.name, es["reference_id"], es["name"], meta_art["title"],
+                )
+                add_result({"file": path.name, "outcome": "would_upload", "reference_id": es["reference_id"]})
+                continue
+
+            evidence_id = client.get_or_create_evidence_set(es)
+            if not evidence_id:
+                logger.error("%s: could not get or create evidence set %s", path.name, es["reference_id"])
+                errors += 1
+                add_result({"file": path.name, "outcome": "error", "reference_id": es["reference_id"]})
+                continue
+            if client.artifact_exists(evidence_id, path.name, metadata.get("run_id")):
+                logger.info("%s: artifact already uploaded for this run; skipping", path.name)
+                skipped_dup += 1
+                add_result({
+                    "file": path.name,
+                    "outcome": "skipped_duplicate",
+                    "reference_id": es["reference_id"],
+                    "evidence_id": evidence_id,
+                })
+                continue
+            content = artifact_content(envelope, artifact_payload)
+            art = client.upload_artifact(evidence_id, path.name, content, meta_art)
+            uploaded += 1
+            logger.info("uploaded %s → set %s artifact %s", path.name, es["reference_id"], art.get("id"))
+            add_result({
+                "file": path.name,
+                "outcome": "uploaded",
+                "reference_id": es["reference_id"],
+                "evidence_id": evidence_id,
+                "artifact_id": art.get("id"),
+            })
+        except Exception as e:
+            logger.error("%s: upload failed: %s", path.name, e)
+            errors += 1
+            add_result({"file": path.name, "outcome": "error", "error": str(e)[:300]})
+            continue
+
+    if seen == 0:
+        msg = f"no evidence files found in {run_dir} — nothing to upload (wrong directory?)"
+        logger.error(msg)
+        raise ValueError(msg)
+
+    log_path = None
+    if not dry_run:
+        log = {
+            "uploaded_at": _utc_now(),
+            "run_dir": str(run_dir),
+            "uploaded": uploaded,
+            "skipped_duplicate": skipped_dup,
+            "skipped_failed": skipped_failed,
+            "errors": errors,
+            "results": results,
+        }
+        log_path = run_dir / "upload_log.json"
+        try:
+            log_path.write_text(json.dumps(log, indent=2))
+        except OSError as e:
+            logger.warning("could not write upload_log.json (%s); log follows:\n%s", e, json.dumps(log, indent=2))
+            log_path = None
+
+    summary = {
+        "run_dir": str(run_dir),
+        "base_url": base_url,
+        "dry_run": dry_run,
+        "uploaded": uploaded,
+        "skipped_duplicate": skipped_dup,
+        "skipped_failed": skipped_failed,
+        "errors": errors,
+        "files": seen,
+        "results": results,
+        "log_path": str(log_path) if log_path else None,
+        "ok": errors == 0,
+    }
+    logger.info(
+        "Done: uploaded=%d skipped_duplicate=%d skipped_failed=%d errors=%d",
+        uploaded, skipped_dup, skipped_failed, errors,
+    )
+    _emit(on_event, {"event": "upload_complete", **summary})
+    return summary
+
+
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
@@ -225,120 +425,18 @@ def main(argv=None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="Resolve and report what would upload; no API calls")
     args = parser.parse_args(argv)
 
-    config = load_config(args.config)
-    paramify_cfg = config.get("paramify") or {}
-    base_url = paramify_cfg.get("base_url") or os.environ.get("PARAMIFY_API_BASE_URL") or DEFAULT_BASE_URL
-    # Don't send the bearer token over cleartext / to an unintended host. Only
-    # loopback may use http (local testing).
-    parsed = urlparse(base_url)
-    if parsed.scheme != "https" and (parsed.hostname or "") not in ("localhost", "127.0.0.1", "::1"):
-        logger.error("base_url must be https to protect the API token (got %r); only localhost may use http", base_url)
-        return 1
-    overrides = config.get("overrides") or {}
-    skip_failed = bool(config.get("skip_failed", False))
-    artifact_payload = config.get("artifact_payload", "envelope")
-    if artifact_payload not in ("envelope", "payload"):
-        logger.error("artifact_payload must be 'envelope' or 'payload', got %r", artifact_payload)
-        return 1
-
-    # Resolve the run directory.
     run_dir = Path(args.run_dir) if args.run_dir else find_latest_run(Path(args.output_dir))
     if not run_dir or not run_dir.is_dir():
-        logger.error("No run directory to upload (looked for %s)", args.run_dir or f"latest run-* under {args.output_dir}")
+        logger.error(
+            "No run directory to upload (looked for %s)",
+            args.run_dir or f"latest run-* under {args.output_dir}",
+        )
         return 1
-    logger.info("Uploading evidence from %s%s", run_dir, " (dry-run)" if args.dry_run else "")
-
-    token = os.environ.get("PARAMIFY_UPLOAD_API_TOKEN")
-    if not token and not args.dry_run:
-        logger.error("PARAMIFY_UPLOAD_API_TOKEN is not set")
+    try:
+        summary = upload_run(run_dir, config=load_config(args.config), dry_run=args.dry_run)
+    except ValueError:
         return 1
-    client = None if args.dry_run else ParamifyClient(token, base_url)
-
-    results: List[Dict] = []
-    uploaded = skipped_dup = skipped_failed = errors = seen = 0
-
-    for path in iter_evidence_files(run_dir):
-        seen += 1
-        try:
-            envelope = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError) as e:
-            logger.error("%s: cannot read as JSON (%s)", path.name, e)
-            errors += 1
-            continue
-
-        # Per-file isolation: one bad file (malformed envelope, API error, etc.)
-        # must never abort the batch — the uploader processes arbitrary run dirs.
-        try:
-            if not is_enveloped(envelope):
-                logger.error("%s: not envelope-wrapped (no metadata/payload); skipping", path.name)
-                errors += 1
-                continue
-
-            metadata = envelope["metadata"]
-            es = resolve_evidence_set(metadata, overrides)
-            if not es or not es.get("reference_id") or not es.get("name"):
-                logger.error("%s: evidence_set missing or incomplete (need reference_id and name); skipping",
-                             path.name)
-                errors += 1
-                results.append({"file": path.name, "outcome": "error", "reason": "missing/incomplete evidence_set"})
-                continue
-
-            if metadata.get("status") == "failed" and skip_failed:
-                logger.info("%s: status=failed and skip_failed set; skipping", path.name)
-                skipped_failed += 1
-                results.append({"file": path.name, "outcome": "skipped_failed", "reference_id": es["reference_id"]})
-                continue
-
-            meta_art = build_artifact_meta(metadata, es["name"])
-
-            if args.dry_run:
-                logger.info("would upload %s → set %s (%s) as %r",
-                            path.name, es["reference_id"], es["name"], meta_art["title"])
-                results.append({"file": path.name, "outcome": "would_upload", "reference_id": es["reference_id"]})
-                continue
-
-            evidence_id = client.get_or_create_evidence_set(es)
-            if not evidence_id:
-                logger.error("%s: could not get or create evidence set %s", path.name, es["reference_id"])
-                errors += 1
-                results.append({"file": path.name, "outcome": "error", "reference_id": es["reference_id"]})
-                continue
-            if client.artifact_exists(evidence_id, path.name, metadata.get("run_id")):
-                logger.info("%s: artifact already uploaded for this run; skipping", path.name)
-                skipped_dup += 1
-                results.append({"file": path.name, "outcome": "skipped_duplicate",
-                                "reference_id": es["reference_id"], "evidence_id": evidence_id})
-                continue
-            content = artifact_content(envelope, artifact_payload)
-            art = client.upload_artifact(evidence_id, path.name, content, meta_art)
-            uploaded += 1
-            logger.info("uploaded %s → set %s artifact %s", path.name, es["reference_id"], art.get("id"))
-            results.append({"file": path.name, "outcome": "uploaded", "reference_id": es["reference_id"],
-                            "evidence_id": evidence_id, "artifact_id": art.get("id")})
-        except Exception as e:
-            logger.error("%s: upload failed: %s", path.name, e)
-            errors += 1
-            results.append({"file": path.name, "outcome": "error", "error": str(e)[:300]})
-            continue
-
-    if seen == 0:
-        logger.error("no evidence files found in %s — nothing to upload (wrong directory?)", run_dir)
-        return 1
-
-    # Write the upload log next to the evidence (skip in dry-run). A failure to
-    # write the log must not flip the exit code of an otherwise-successful run.
-    if not args.dry_run:
-        log = {"uploaded_at": _utc_now(), "run_dir": str(run_dir),
-               "uploaded": uploaded, "skipped_duplicate": skipped_dup,
-               "skipped_failed": skipped_failed, "errors": errors, "results": results}
-        try:
-            (run_dir / "upload_log.json").write_text(json.dumps(log, indent=2))
-        except OSError as e:
-            logger.warning("could not write upload_log.json (%s); log follows:\n%s", e, json.dumps(log, indent=2))
-
-    logger.info("Done: uploaded=%d skipped_duplicate=%d skipped_failed=%d errors=%d",
-                uploaded, skipped_dup, skipped_failed, errors)
-    return 1 if errors else 0
+    return 0 if summary["ok"] else 1
 
 
 if __name__ == "__main__":

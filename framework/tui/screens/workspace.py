@@ -1,8 +1,8 @@
-"""WorkspaceScreen — the four-tab fetcher workspace.
+"""WorkspaceScreen — the five-tab fetcher workspace.
 
 Hosts the shared chrome (AppHeader + HintFooter) and the Catalog / Manifest /
-Run / Evidence tabs. The App pushes this once a manifest is chosen (from the
-welcome front door, or directly via --manifest). The active manifest can be
+Run / Evidence / Upload tabs. The App pushes this once a manifest is chosen
+(from the welcome front door, or directly via --manifest). The active manifest can be
 swapped in place with the quick-picker (`m`), which reloads the pages.
 """
 
@@ -20,20 +20,22 @@ from framework.tui.screens.catalog import CatalogPage
 from framework.tui.screens.evidence import EvidencePage
 from framework.tui.screens.manifest import ManifestPage
 from framework.tui.screens.run import RunPage
+from framework.tui.screens.upload import UploadPage
 
 
 class WorkspaceScreen(Screen):
-    TAB_IDS = ["tab-catalog", "tab-manifest", "tab-run", "tab-evidence"]
+    TAB_IDS = ["tab-catalog", "tab-manifest", "tab-run", "tab-evidence", "tab-upload"]
 
     # Screen-level bindings shown on every tab's footer (after the page-specific
     # hints). Keep in sync with BINDINGS below.
-    WORKSPACE_HINTS = [("1-4", "tabs"), ("m", "manifest"), ("q", "quit")]
+    WORKSPACE_HINTS = [("1-5", "tabs"), ("m", "manifest"), ("q", "quit")]
 
     BINDINGS = [
         Binding("1", "go_tab(0)", "Catalog"),
         Binding("2", "go_tab(1)", "Manifest"),
         Binding("3", "go_tab(2)", "Run"),
         Binding("4", "go_tab(3)", "Evidence"),
+        Binding("5", "go_tab(4)", "Upload"),
         Binding("slash", "focus_search", "Search"),
         Binding("escape", "unfocus", "Unfocus", show=False),
         Binding("m", "switch_manifest", "Manifest…"),
@@ -52,6 +54,8 @@ class WorkspaceScreen(Screen):
                 yield RunPage(id="run-page")
             with TabPane("Evidence", id="tab-evidence"):
                 yield EvidencePage(id="evidence-page")
+            with TabPane("Upload", id="tab-upload"):
+                yield UploadPage(id="upload-page")
         yield HintFooter()
 
     def on_mount(self) -> None:
@@ -63,6 +67,10 @@ class WorkspaceScreen(Screen):
         self.query_one(ManifestPage).rebuild()
         try:
             self.query_one(EvidencePage).rebuild_runs()
+        except Exception:
+            pass
+        try:
+            self.query_one(UploadPage).rebuild()
         except Exception:
             pass
         self.query_one(RunPage).reset_state()  # clear stale run state (no-op if running)

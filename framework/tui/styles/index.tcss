@@ -147,6 +147,35 @@ EvidencePage {
 
 #evidence-runs, #evidence-files { height: 1fr; }
 
+/* Upload */
+UploadPage {
+    height: 1fr;
+}
+
+#upload-top {
+    height: auto;
+    padding: 1 1 0 1;
+    align: left middle;
+}
+
+#upload-top Button {
+    margin-right: 1;
+}
+
+#upload-banner {
+    width: 1fr;
+    padding: 1 0 0 1;
+}
+
+#upload-body {
+    height: 1fr;
+    padding: 1 1 0 1;
+}
+
+#upload-summary-panel { width: 42%; }
+#upload-log-panel { width: 1fr; margin-left: 1; }
+#upload-summary, #upload-log { height: 1fr; }
+
 /* Modals */
 ModalScreen {
     align: center middle;

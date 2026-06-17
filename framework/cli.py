@@ -14,6 +14,7 @@ Read / discover:
   paramify manifests [--json]                  # discovered run manifests
   paramify runs [--output-dir DIR] [--json]    # past runs under an output dir
   paramify evidence <path> [--json]            # read one evidence file
+  paramify upload [run-dir] [--dry-run] [--json]
 
 Manifest editing (writes the manifest file; -f/--file, default ./manifest.yaml;
 every subcommand accepts --json, emitting {"ok", "path", "errors"}):
@@ -33,6 +34,7 @@ every subcommand accepts --json, emitting {"ok", "path", "errors"}):
 Validate / run / launch:
   paramify validate <manifest> [--json]
   paramify run <manifest> [--json]
+  paramify upload [run-dir] [--output-dir DIR] [--config PATH] [--dry-run] [--json]
   paramify tui [--manifest PATH] [--at ROOT]   # interactive terminal UI
 
 Secrets are referenced as ${env:VAR} — set-secret / add-target take the ENV VAR
@@ -183,6 +185,40 @@ def _human_run_printer():
         elif kind == "run_complete":
             typer.echo(f"\n_run_metadata.json → {ev['metadata_path']}")
         # log_line is intentionally not printed (matches prior non-streaming CLI)
+    return on_event
+
+
+def _human_upload_printer():
+    """Return an on_event callback for Paramify upload progress."""
+    def on_event(ev: dict) -> None:
+        kind = ev["event"]
+        if kind == "upload_start":
+            mode = " (dry-run)" if ev.get("dry_run") else ""
+            typer.echo(f"Upload {ev['files']} file(s) from {ev['run_dir']} → {ev['base_url']}{mode}\n")
+        elif kind == "upload_file":
+            outcome = ev.get("outcome")
+            if outcome == "uploaded":
+                mark = "OK"
+            elif outcome in ("skipped_duplicate", "skipped_failed"):
+                mark = "SKIP"
+            elif outcome == "would_upload":
+                mark = "DRY"
+            else:
+                mark = "FAIL"
+            ref = f"  set={ev['reference_id']}" if ev.get("reference_id") else ""
+            reason = ev.get("reason") or ev.get("error")
+            suffix = f"  {reason}" if reason else ""
+            typer.echo(f"        [{mark}] {ev.get('file', '?')}{ref}{suffix}")
+        elif kind == "upload_complete":
+            typer.echo(
+                "\nDone: "
+                f"uploaded={ev['uploaded']} "
+                f"skipped_duplicate={ev['skipped_duplicate']} "
+                f"skipped_failed={ev['skipped_failed']} "
+                f"errors={ev['errors']}"
+            )
+            if ev.get("log_path"):
+                typer.echo(f"upload_log.json → {ev['log_path']}")
     return on_event
 
 
@@ -394,6 +430,65 @@ def run_cmd(
             typer.echo(json.dumps({"ok": False, "error": str(e)}, indent=2))
         else:
             _err(f"Run failed: {e}")
+        raise typer.Exit(1)
+    if json_out:
+        typer.echo(json.dumps(summary, indent=2, default=str))
+    raise typer.Exit(0 if summary["ok"] else 1)
+
+
+@app.command("upload")
+def upload_cmd(
+    run_dir: Optional[str] = typer.Argument(None, help="Run directory to upload (default: latest under --output-dir)"),
+    output_dir: str = typer.Option("./evidence", "-o", "--output-dir", help="Base dir to find latest run"),
+    config: Optional[str] = typer.Option(None, "--config", help="Uploader config YAML"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Resolve and report what would upload; no API calls"),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON summary"),
+):
+    """Upload one evidence run to Paramify."""
+    root = api.find_repo_root()
+    if run_dir:
+        resolved_run_dir = Path(run_dir).resolve()
+    else:
+        runs = api.list_runs(output_dir)
+        if not runs:
+            msg = f"No runs found under {output_dir}."
+            if json_out:
+                typer.echo(json.dumps({"ok": False, "errors": [msg]}, indent=2))
+            else:
+                _err(msg)
+            raise typer.Exit(1)
+        resolved_run_dir = Path(runs[0]["dir"]).resolve()
+
+    config_path = Path(config).resolve() if config else None
+    try:
+        preflight = api.upload_preflight(resolved_run_dir, root, config_path, dry_run=dry_run)
+    except Exception as e:  # noqa: BLE001 — surface setup errors to CLI users
+        if json_out:
+            typer.echo(json.dumps({"ok": False, "errors": [str(e)]}, indent=2))
+        else:
+            _err(f"Upload setup failed: {e}")
+        raise typer.Exit(1)
+    if not preflight["ok"]:
+        if json_out:
+            typer.echo(json.dumps(preflight, indent=2, default=str))
+        else:
+            for e in preflight["errors"]:
+                _err(f"  ERROR  {e}")
+        raise typer.Exit(1)
+
+    try:
+        summary = api.upload_run(
+            resolved_run_dir,
+            root,
+            config_path,
+            dry_run=dry_run,
+            on_event=None if json_out else _human_upload_printer(),
+        )
+    except Exception as e:  # noqa: BLE001
+        if json_out:
+            typer.echo(json.dumps({"ok": False, "errors": [str(e)]}, indent=2))
+        else:
+            _err(f"Upload failed: {e}")
         raise typer.Exit(1)
     if json_out:
         typer.echo(json.dumps(summary, indent=2, default=str))

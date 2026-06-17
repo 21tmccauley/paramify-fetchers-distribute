@@ -17,7 +17,9 @@ the same shape as the on-disk YAML and the manifest schema. Manifest is only
 materialized internally (parse_manifest) for semantic validation and execution.
 """
 
+import importlib.util
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -473,6 +475,94 @@ def run(
     }
     emit({"event": "run_complete", **summary})
     return summary
+
+
+# --------------------------------------------------------------------------- #
+# Upload — Paramify evidence uploader facade (powers CLI + TUI)
+# --------------------------------------------------------------------------- #
+
+def _load_paramify_uploader(root: Path):
+    """Load the source-tree uploader without requiring uploaders/ to be packaged."""
+    path = Path(root) / "uploaders" / "paramify_evidence" / "uploader.py"
+    if not path.exists():
+        raise RuntimeError(f"Paramify evidence uploader not found at {path}")
+    spec = importlib.util.spec_from_file_location("paramify_evidence_uploader", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load Paramify evidence uploader from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def upload_preflight(
+    run_dir,
+    root: Path,
+    config_path: Optional[Path] = None,
+    *,
+    dry_run: bool = False,
+) -> dict:
+    """Inspect upload readiness without making Paramify API calls."""
+    uploader = _load_paramify_uploader(root)
+    uploader.load_dotenv()
+    config = uploader.load_config(str(config_path)) if config_path else {}
+    paramify_cfg = config.get("paramify") or {}
+    base_url = (
+        paramify_cfg.get("base_url")
+        or os.environ.get("PARAMIFY_API_BASE_URL")
+        or uploader.DEFAULT_BASE_URL
+    )
+
+    run_path = Path(run_dir)
+    errors: List[str] = []
+    file_count = 0
+    if not run_path.is_dir():
+        errors.append(f"No run directory to upload: {run_path}")
+    else:
+        file_count = sum(1 for _ in uploader.iter_evidence_files(run_path))
+        if file_count == 0:
+            errors.append(f"No evidence files found in {run_path}")
+
+    url_error = uploader._base_url_error(base_url)
+    if url_error:
+        errors.append(url_error)
+
+    token_present = bool(os.environ.get("PARAMIFY_UPLOAD_API_TOKEN"))
+    if not token_present and not dry_run:
+        errors.append("PARAMIFY_UPLOAD_API_TOKEN is not set")
+
+    return {
+        "ok": not errors,
+        "run_dir": str(run_path),
+        "base_url": base_url,
+        "file_count": file_count,
+        "token_present": token_present,
+        "dry_run": dry_run,
+        "errors": errors,
+    }
+
+
+def upload_run(
+    run_dir,
+    root: Path,
+    config_path: Optional[Path] = None,
+    *,
+    dry_run: bool = False,
+    on_event: Optional[Callable[[dict], None]] = None,
+) -> dict:
+    """Upload one run directory to Paramify.
+
+    Fires upload_start / upload_file / upload_complete so front-ends can render
+    progress. Raises ValueError for setup errors; returns the uploader summary
+    for completed batches, even when some files failed.
+    """
+    uploader = _load_paramify_uploader(root)
+    config = uploader.load_config(str(config_path)) if config_path else {}
+    return uploader.upload_run(
+        Path(run_dir),
+        config=config,
+        dry_run=dry_run,
+        on_event=on_event,
+    )
 
 
 # --------------------------------------------------------------------------- #

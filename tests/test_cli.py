@@ -48,7 +48,7 @@ def _registered():
 
 EXPECTED_TOP = {
     "list", "catalog", "describe", "manifests", "runs", "evidence",
-    "validate", "run", "manifest", "tui",
+    "validate", "run", "upload", "manifest", "tui",
 }
 EXPECTED_MANIFEST = {
     "init", "new", "add", "remove", "set-config", "set-secret",
@@ -104,6 +104,8 @@ API_TO_CLI = {
     "dump_manifest": "<implicit: every mutator>",
     "validate": "validate",
     "run": "run",
+    "upload_preflight": "upload",
+    "upload_run": "upload",
     "list_runs": "runs",
     "read_evidence": "evidence",
 }
@@ -242,6 +244,32 @@ def test_evidence_json_enveloped(tmp_path):
     assert data["enveloped"] is True
     assert data["schema_version"] == "1.0"
     assert data["payload"] == {"k": "v"}
+
+
+def test_upload_dry_run_json(tmp_path, in_repo):
+    run_dir = tmp_path / "run-2026-01-01T00-00-00Z"
+    run_dir.mkdir()
+    (run_dir / "example.json").write_text(json.dumps({
+        "schema_version": "1.0",
+        "metadata": {
+            "fetcher_name": "example_fetcher",
+            "fetcher_version": "0.1.0",
+            "run_id": "2026-01-01T00-00-00Z",
+            "status": "ok",
+            "collected_at": "2026-01-01T00:00:00Z",
+            "evidence_set": {
+                "reference_id": "TEST-001",
+                "name": "Example Evidence",
+                "instructions": "Upload test evidence.",
+            },
+        },
+        "payload": {"ok": True},
+    }))
+    data = _json(runner.invoke(app, ["upload", str(run_dir), "--dry-run", "--json"]))
+    assert data["ok"] is True
+    assert data["dry_run"] is True
+    assert data["files"] == 1
+    assert data["results"][0]["outcome"] == "would_upload"
 
 
 def test_evidence_missing_exits_1(tmp_path):

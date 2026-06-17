@@ -14,7 +14,7 @@ disabled while a run is in flight.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Dict, Optional
+from typing import Dict
 
 from rich.text import Text
 from textual import work

@@ -22,6 +22,26 @@ fetcher's contract:
 
 ---
 
+## Supported tools
+
+| Category | Fetchers | What it collects | Status |
+|---|---:|---|---|
+| **AWS** | 79 | Encryption at rest, IAM, high availability, logging, network segmentation — across the AWS service surface | ✅ complete |
+| **Okta** | 8 | Phishing-resistant MFA, authenticators, least privilege, just-in-time access, account management | starter set |
+| **SentinelOne** | 5 | Agents, activities, cloud detection rules, XDR assets, user config | starter set |
+| **KnowBe4** | 4 | Security-awareness, high-risk, developer, and module-based training summaries | starter set |
+| **GitLab** | 3 | CI/CD pipeline config, merge-request and project summaries | starter set |
+| **Kubernetes** | 3 | EKS pod inventory, microservice segmentation, `kubectl` security posture | starter set |
+| **Rippling** | 3 | Employee roster, current employees, managed devices | starter set |
+| **Checkov** | 2 | IaC scans over cloned Terraform / Kubernetes source | starter set |
+
+Eight categories, 107 fetchers. AWS is complete; the rest are a growing starter
+set. Adding a tool is a new category; adding a control is a new fetcher — both
+follow [a short, documented path](#adding-a-new-fetcher). Stubbed but not yet
+ported: Azure, Wiz, and SSL Labs.
+
+---
+
 ## How it runs
 
 Four pieces, kept deliberately separate:
@@ -36,6 +56,20 @@ Four pieces, kept deliberately separate:
   config, against what targets. Lives in the customer's environment, not here.
 - **Runner** — reads `fetcher.yaml` files and a manifest, resolves secrets and
   config into environment variables, and executes each fetcher.
+
+```mermaid
+flowchart LR
+    subgraph infra["runs on customer infrastructure"]
+        direction LR
+        Y["fetcher.yaml<br/>self-description"] --> R["runner"]
+        M["run manifest<br/>which fetchers + config"] --> R
+        R -->|"secrets + config<br/>as env vars"| F["fetcher<br/>one source each"]
+        F -->|"raw JSON"| R
+        R -->|"wrap in envelope"| E[("evidence files<br/>one run dir")]
+        E --> U["uploader"]
+    end
+    U -->|"Paramify REST v0 · HTTPS only"| P[("Paramify")]
+```
 
 Everything goes through one facade, `framework.api` — discovery, manifest
 editing, validation, and running. One CLI, `paramify`, sits on top of it and
@@ -82,6 +116,47 @@ runner wraps each evidence file in an envelope —
 name/version/category, run id, target, `collected_at`, status, exit code, and
 the `evidence_set` identity; failed invocations also get a `stderr_tail`. The
 `_run_metadata.json` index itself is not enveloped.
+
+A finished evidence file looks like this — an AWS VPC-segmentation run,
+abbreviated:
+
+```json
+{
+  "schema_version": "1.0",
+  "metadata": {
+    "fetcher_name": "aws_vpc_network_segmentation",
+    "fetcher_version": "0.1.0",
+    "category": "aws",
+    "run_id": "2026-06-16T15-56-41Z",
+    "target": { "region": "us-east-1" },
+    "collected_at": "2026-06-16T16:00:14Z",
+    "status": "success",
+    "exit_code": 0,
+    "evidence_set": {
+      "reference_id": "EVD-VPC-SEGMENTATION",
+      "name": "VPC Network Segmentation",
+      "instructions": "Script: fetcher.sh. Commands: aws ec2 describe-vpcs, describe-subnets, describe-vpc-peering-connections, describe-vpc-endpoints. Maps to KSI-CNA-03.",
+      "description": "Lists VPCs, subnets, peering connections, and endpoints to document network topology and segmentation."
+    }
+  },
+  "payload": {
+    "metadata": { "account_id": "111122223333", "region": "us-east-1", "datetime": "2026-06-16T16:00:14Z" },
+    "results": [
+      { "ResourceType": "Vpcs", "Items": [
+        { "VpcId": "vpc-0a1b2c3d", "CidrBlock": "172.31.0.0/16", "IsDefault": true, "State": "available" }
+      ] },
+      { "ResourceType": "Subnets", "Items": [
+        { "SubnetId": "subnet-0d7e6de0", "VpcId": "vpc-0a1b2c3d", "CidrBlock": "172.31.80.0/20", "AvailabilityZone": "us-east-1b" }
+      ] }
+    ]
+  }
+}
+```
+
+The runner owns the `metadata` envelope; the fetcher owns `payload`. The
+`evidence_set` block (from `fetcher.yaml`) is what an uploaded file maps to in
+Paramify. Note there is no pass/fail verdict — that judgment is Paramify-side, by
+design (peering connections and endpoints are omitted above for brevity).
 
 ### Building a manifest
 

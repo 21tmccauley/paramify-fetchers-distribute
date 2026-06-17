@@ -3,7 +3,7 @@
 > [!RECALL]
 > Before we build: your fetcher reads an env var you exported in your shell but never declared in `fetcher.yaml`. What does the runner do with it — and which of the two test paths from Part 1 (direct invocation vs. `paramify run`) is the only one that would catch the mistake?
 
-In Part 1 you followed a fetcher somebody else wrote. Today `paramify list` goes from 58 to 59, and the 59th is yours.
+In Part 1 you followed a fetcher somebody else wrote. Today `paramify list` goes from 107 to 108, and the 108th is yours.
 
 The evidence we'll collect is one of the oldest items on any security questionnaire: TLS certificate expiry. An expired certificate is the classic silent outage — nothing breaks until the moment everything does — and "show me your certificate inventory and expiry dates" is a standing audit request. No fetcher in the catalog collects it yet, and it has a property that makes it ideal for learning the authoring path: the data source is the public TLS handshake itself. No API token, no tenant, no sandbox.
 
@@ -104,7 +104,7 @@ paramify describe tls_certificate_expiry
 ```
 
 ```
-Discovered 59 fetchers:
+Discovered 108 fetchers:
 
 tls_certificate_expiry  v0.1.0  (category=tls)
   Collects the serving TLS certificate for a host — subject, issuer, validity window, and days until expiry. ...
@@ -114,7 +114,7 @@ tls_certificate_expiry  v0.1.0  (category=tls)
     - port (integer, optional) default=443
 ```
 
-Fifty-nine. The catalog grew because a YAML file passed a schema — no registration, no central list to edit. Notice `describe` shows your config knobs and no secrets section at all: the empty list renders as honest silence.
+One hundred eight. The catalog grew because a YAML file passed a schema — no registration, no central list to edit. Notice `describe` shows your config knobs and no secrets section at all: the empty list renders as honest silence.
 
 The YAML makes promises; the script has to keep them.
 
@@ -305,17 +305,17 @@ python -m pytest tests -q
 Expected output:
 
 ```
-Discovered 59 fetchers:
+Discovered 108 fetchers:
 ..............................                                           [100%]
 30 passed in 2.88s
 ```
 
-The suite doesn't count fetchers — it guards the CLI/API/TUI parity from Part 1 — so passing here confirms your new category and fetcher broke nothing structural. The count line is the one that should have moved: 58 before, 59 with yours.
+The suite doesn't count fetchers — it guards the CLI/API/TUI parity from Part 1 — so passing here confirms your new category and fetcher broke nothing structural. The count line is the one that should have moved: 107 before, 108 with yours.
 
 **Likely errors:**
 
 - If `paramify list` shows a fetcher literally named `<category>_<short_name>`, you copied the template and ran discovery before editing `fetcher.yaml` — the placeholders are valid YAML and the schema can't tell them from real values.
-- If the count still says `Discovered 58 fetchers`, discovery isn't seeing your directory: check that it's `fetchers/tls/certificate_expiry/` (a directory whose name starts with `_` is skipped by design, and a misplaced `fetcher.yaml` is invisible).
+- If the count still says `Discovered 107 fetchers`, discovery isn't seeing your directory: check that it's `fetchers/tls/certificate_expiry/` (a directory whose name starts with `_` is skipped by design, and a misplaced `fetcher.yaml` is invisible).
 - If discovery errors with `'secrets' is a required property`, you deleted the `secrets` key instead of emptying it — the schema requires the key to exist; `secrets: []` is the declared-empty form.
 - If the positive smoke test fails with `SSLCertVerificationError` against a host you trust, you're likely behind a TLS-intercepting corporate proxy — your machine sees the proxy's certificate, not the host's. Try another network, and note that this, too, is the fetcher honestly reporting what it observed.
 - If the negative smoke test exits 0, your `main()` ending isn't returning 1 on a non-empty ledger, or `sys.exit(main())` isn't at the bottom — `main()` called bare discards the return value.
@@ -335,7 +335,7 @@ Before the exercises, two sentences in your own words, for a skeptical colleague
 
 ## Sources
 
-This part was researched from the repository working tree (branch `aws-multi-account-eks`, June 10, 2026) and the Python standard library documentation; every command output shown — discovery, both smoke tests, the manifest build, the green run, and the test suite — was captured live from a real build of this fetcher, which was then removed so you can build it yourself.
+This part was researched from the repository working tree (branch `main`, June 10, 2026) and the Python standard library documentation; every command output shown — discovery, both smoke tests, the manifest build, the green run, and the test suite — was captured live from a real build of this fetcher, which was then removed so you can build it yourself.
 
 **Repository docs and code**
 

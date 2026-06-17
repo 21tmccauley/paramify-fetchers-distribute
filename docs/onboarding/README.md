@@ -22,7 +22,7 @@ hand you Claude Code commands:
 lathe store docs/onboarding/paramify-fetchers-onboarding \
   --tag python --tag compliance --tag cli --tag onboarding --tag architecture \
   --repo https://github.com/21tmccauley/paramify-fetchers.git \
-  --repo-branch aws-multi-account-eks \
+  --repo-branch main \
   --tool python:3.14.5 --tool typer:0.26.7 --tool requests:2.34.2 \
   --source https://github.com/21tmccauley/paramify-fetchers \
   --voice plainspoken \

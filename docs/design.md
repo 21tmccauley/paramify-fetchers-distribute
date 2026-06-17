@@ -1,7 +1,7 @@
 # Paramify Fetcher Framework — Design Notes
 
-**Status:** Living document — design rationale. For the current state of the
-work (what's ported, what's in progress), see [`handoff.md`](handoff.md).
+**Status:** Living document — design rationale and current state of the work
+(see the **Current state of the work** section below).
 **Author:** Tate
 **Last updated:** 2026-06-01
 
@@ -222,7 +222,7 @@ Two aggregation modes:
 - **`per_target`** — one envelope per target (e.g., one piece of evidence per GitLab repo)
 - **`aggregate`** — fetcher receives the whole target list and emits one combined envelope (e.g., "S3 bucket public access across all buckets")
 
-Both modes are declared via `output.aggregation` in `fetcher.yaml`. Every fanout fetcher to date uses `per_target`; no `aggregate`-mode fetcher exists yet. All 30 AWS fetchers are fanout: 22 are regional (`region` + `profile` targets, one `(region, profile)` per invocation), 5 are global and fan out by `profile` only (`region` optional, defaults `us-east-1`), and 3 are mixed-scope (a global half duplicates per region — documented, not split). GitLab fans out per project; K8s per cluster.
+Both modes are declared via `output.aggregation` in `fetcher.yaml`. Every fanout fetcher to date uses `per_target`; no `aggregate`-mode fetcher exists yet. All 79 AWS fetchers are fanout: 64 are regional (`region` + `profile` targets, one `(region, profile)` per invocation), 12 are global and fan out by `profile` only (`region` optional, defaults `us-east-1`), and 3 are mixed-scope (a global half duplicates per region — documented, not split). GitLab fans out per project; K8s per cluster.
 
 ### Inversion from current model
 
@@ -293,40 +293,49 @@ Orchestration that chains collect → upload is customer-owned, not built into t
 ```
 paramify-fetchers/
 ├── CLAUDE.md                         # context for Claude Code sessions
-├── README.md
+├── README.md                         # entry point for engineers adding fetchers
+├── pyproject.toml                    # packaging; installs the `paramify` CLI (pip install -e .)
+├── requirements.txt                  # python-dotenv, requests, pyyaml, jsonschema, typer (+ textual, checkov)
+├── manifest.yaml                     # repo-root sample manifest
+├── run_and_upload.sh                 # repo-root collect→upload example glue
 ├── .gitignore
 │
-├── framework/                        # contract + runner code
+├── framework/                        # contract + facade + runner code
 │   ├── api.py                        # THE FACADE — discovery, manifest edit, validate, run
+│   ├── cli.py                        # the `paramify` CLI (Typer) — steers every front-end
 │   ├── contract.py                   # dataclasses (Fetcher, Manifest, RunResult, ...)
 │   ├── config_loader.py              # discover fetchers; validate against schema
 │   ├── secret_resolver.py            # ${env:VAR_NAME} resolution
+│   ├── envelope.py                   # wraps each output in {schema_version, metadata, payload}
 │   ├── runner/
-│   │   ├── __init__.py               # CLI front-end (list/catalog/describe/validate/run/manifest)
+│   │   ├── __init__.py               # back-compat shim (`python -m framework.runner` → the CLI)
 │   │   ├── __main__.py               # entry point for `python -m framework.runner`
 │   │   ├── manifest_loader.py        # load + validate manifests
 │   │   ├── executor.py               # subprocess.Popen + threads; streamed stdout; per-invocation timeout
 │   │   ├── logger.py                 # empty stub
 │   │   ├── retry.py                  # empty stub
 │   │   └── dependency_graph.py       # empty stub
+│   ├── tui/                          # Textual terminal UI front-end (`paramify tui`)
 │   └── schemas/
 │       ├── fetcher_schema.json
-│       └── run_manifest_schema.json
+│       ├── category_schema.json
+│       ├── run_manifest_schema.json
+│       └── envelope_schema.json
 │
-├── fetchers/                         # 58 fetchers across 8 categories
-│   ├── _categories/                  # category metadata (per-category access docs)
+├── fetchers/                         # 107 fetchers across 8 categories
+│   ├── _categories/                  # platform-wide config + auth per category
 │   │   ├── okta.yaml
 │   │   ├── aws.yaml
-│   │   ├── gitlab.yaml
-│   │   └── ...
+│   │   └── ...                       # (+ azure/ssllabs/wiz stubs — no ported fetchers)
 │   ├── _template/                    # starter directory for new fetchers
 │   ├── okta/                         # 8 (7 Python KSI wrappers + 1 bash); _shared/okta_iam_core.py
-│   ├── aws/                          # 30 bash (largest category; fanout per region/profile)
+│   ├── aws/                          # 79 bash (largest category; fanout per region/profile)
 │   ├── sentinelone/                  # 5 single-target Python
 │   ├── knowbe4/                      # 4 bash
 │   ├── k8s/                          # 3 bash (aws-cli + kubectl)
 │   ├── rippling/                     # 3 single-target Python
-│   └── gitlab/                       # 3 fanout-capable Python (e.g. ci_cd_pipeline_config, KSI-CMT-03)
+│   ├── gitlab/                       # 3 fanout-capable Python (e.g. ci_cd_pipeline_config)
+│   └── checkov/                      # 2 bash IaC scanners (terraform + kubernetes)
 │
 ├── comparators/                      # scaffold only (_template/); no comparator ported, runner doesn't honor depends_on
 │
@@ -334,23 +343,25 @@ paramify-fetchers/
 │   ├── paramify_evidence/            # BUILT — get-or-create evidence set + multipart upload
 │   └── paramify_issues/              # empty stub (Wiz-style issues; not built)
 │
-├── catalog/                          # not built yet (will be GENERATED from fetcher.yaml files)
+├── deploy/                           # containerized bundle — the MVP deployment
+│   ├── Dockerfile / docker-compose.yml / entrypoint.sh / crontab
+│   ├── manifests/                    # daily / weekly / aws run manifests
+│   └── k8s/                          # CronJobs + IRSA + Terraform multi-account module
 │
 ├── examples/                         # sample manifests (minimal_run, multi_region_aws, with_platform_config, upload.yaml, ...)
-│   └── minimal_run.yaml              # exercises single-target + fanout
-│
-├── manifest.yaml                     # repo-root sample manifest
-├── run_and_upload.sh                 # repo-root collect→upload example glue
-│
-├── requirements.txt                  # python-dotenv, requests, pyyaml, typer, textual
+├── manifests/                        # discovered run manifests (`paramify manifests`)
+├── catalog/                          # not built yet (will be GENERATED from fetcher.yaml files)
 │
 └── docs/
-    ├── design.md                     # this file — design rationale
-    ├── handoff.md                    # current state of the work (source of truth)
+    ├── design.md                     # this file — design rationale + current state
     ├── fetcher_contract.md           # the runner⇄fetcher contract
     ├── porting_playbook.md           # how to port an existing fetcher (the "why")
     ├── authoring_a_fetcher.md        # how to write a new fetcher from scratch
-    └── run_manifest_reference.md     # manifest format reference
+    ├── run_manifest_reference.md     # manifest format reference
+    ├── config_injection_design.md    # platform/config/auth injection model
+    ├── envelope_design.md            # evidence envelope format
+    ├── packaging_design.md           # proposed `paramify package` (not built)
+    └── onboarding/                   # hands-on guided tutorial (Lathe)
 ```
 
 ### Naming conventions
@@ -399,10 +410,10 @@ The current approach parses JSON output with regex to determine pass/fail. Most 
 
 ## Current state of the work
 
-**The authoritative, kept-current account of what's ported and what's in
-progress lives in [`handoff.md`](handoff.md).** Snapshot: 58 fetchers across
+**This section, together with `CLAUDE.md`, is the kept-current account of
+what's ported and what's in progress.** Snapshot: 107 fetchers across
 8 categories (okta, aws, sentinelone, knowbe4, gitlab, k8s, rippling, checkov); the
-AWS port is complete (30/30). The pieces that make this run:
+AWS port is complete (79/79). The pieces that make this run:
 
 - **Facade + three front-ends** (`framework/api.py`) — all discovery, manifest editing, validate, and run go through one facade; the human CLI, the `--json` AI CLI, and the Textual TUI (`paramify tui`) all call only the facade
 - **Fetcher schema** (`framework/schemas/fetcher_schema.json`) — supports fanout: `supports_targets`, `target_schema`, `per_target` secrets, `output.aggregation`. Extended additively from the original minimal version.
@@ -413,7 +424,7 @@ AWS port is complete (30/30). The pieces that make this run:
   - Logging: Python `logging` module; bash uses structured `printf` with a matching format
   - Exit codes: v0.x is binary 0/1 — Okta wrappers check `OktaAPIClient.api_failures`; GitLab checks result `status`; bash tracks via temp file (subshells can't mutate parent counters)
   - Output filenames: per_target fetchers derive their own filename from the target identifier
-- **Docs** — see the `docs/` tree above; `handoff.md` is the entry point each session.
+- **Docs** — see the `docs/` tree above.
 
 Done since the last revision:
 
@@ -431,7 +442,6 @@ What's deferred:
 - **`aggregate` mode** — declared in schema; no fetcher uses it yet
 - **Unported categories** — `azure`, `ssllabs`, and `wiz` exist only as `_categories/<name>.yaml` stubs with no ported fetchers
 - **Shared module refactor** — `okta_iam_core.py` still reads env directly (with one tiny additive change: it now exposes `api_failures` for exit-code purposes). Full rework waits on the framework's secret resolver taking over per-fetcher invocation.
-- **Cleanup**: `framework/common/env_loader.py` (3.4KB) is a verbatim copy of the upstream `common/env_loader.py` that we explicitly chose not to port. The runner doesn't import it; it's unused dead weight that should be removed.
 
 ---
 

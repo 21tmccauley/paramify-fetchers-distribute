@@ -186,7 +186,7 @@ This one capability ties off several open threads:
 
 1. **Schema + backfill.** Add `python_requires`/`system_requires` to
    `fetcher_schema.json` + `category_schema.json` + `contract.py`/`config_loader.py`;
-   backfill declarations onto the existing 58 fetchers from the known mapping
+   backfill declarations onto the existing 107 fetchers from the known mapping
    (aws→`aws,jq`; k8s→`aws,kubectl,jq`; checkov→`checkov,git,jq`; other bash→`jq`;
    python fetchers→their imports). *(~½–1 day)*
 2. **Recipe catalog + `paramify package --target docker`** generating a build

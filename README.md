@@ -6,7 +6,7 @@ to disk as JSON. A separate uploader stage pushes that evidence to Paramify.
 This repo is the fetchers, the runner that executes them, and the uploader; the
 fetchers themselves never talk to Paramify directly.
 
-There are 58 fetchers across 8 categories today. If you're a GRC or security
+There are 107 fetchers across 8 categories today. If you're a GRC or security
 engineer here to add evidence collection for a new control or a new tool, this
 README is for you.
 
@@ -127,7 +127,7 @@ principles keep that from happening again:
 
 - **One contract, schema-enforced.** A fetcher declares itself in `fetcher.yaml`,
   validated at discovery time. Anything not in the schema is not a thing a
-  fetcher can do. This is what lets the runner treat all 58 fetchers identically.
+  fetcher can do. This is what lets the runner treat all 107 fetchers identically.
 - **Fetchers run on customer infrastructure**, never Paramify's. So a fetcher
   never assumes a Paramify connection, and the framework owns no scheduling.
 - **Secrets are source-agnostic.** A fetcher reads `OKTA_API_TOKEN` from the
@@ -326,16 +326,18 @@ runner iterates, sets per-target env vars, runs the entry once per target, and
 isolates failures so one bad target doesn't sink the rest. Worked example:
 [`fetchers/gitlab/ci_cd_pipeline_config/`](fetchers/gitlab/ci_cd_pipeline_config/).
 
-All 30 AWS fetchers fan out, but `profile` and `region` are **optional**. Omit
+All 79 AWS fetchers fan out, but `profile` and `region` are **optional**. Omit
 them — or omit `targets[]` entirely — and the fetcher collects the **ambient**
 account/region via the AWS CLI credential chain ("collect where deployed").
 Set `profile:`/`region:` per target for multi-account / multi-region
 assume-role fanout; a target's values override the ambient defaults. With a
 `profile` set, regional fetchers run once per `(region, profile)` pair and write
-`aws_<short>_<profile>_<region>.json`. Five are **global** and fan out by profile
-only (`region` defaults `us-east-1`, output `aws_<short>_<profile>.json`):
-`iam_roles`, `iam_policies`, `iam_users_groups`, `route53_high_availability`,
-`s3_encryption_status`. A few are mixed-scope and documented as such.
+`aws_<short>_<profile>_<region>.json`. Twelve are **global** and fan out by
+profile only (`region` defaults `us-east-1`, output `aws_<short>_<profile>.json`):
+`iam_roles`, `iam_policies`, `iam_users_groups`, `iam_mfa_status`,
+`iam_password_policy`, `organizations_scp`, `route53_high_availability`,
+`s3_encryption_status`, `cloudfront_distribution_security`, `shield_dos_protection`,
+`global_accelerator_ha`, `resource_inventory`. A few are mixed-scope and documented as such.
 `_categories/aws.yaml` (and `k8s.yaml`) carry `auth.passthrough_env` to let
 ambient IRSA / instance-role vars through the env whitelist.
 
@@ -377,5 +379,4 @@ managers, or ambient cloud identity) flows — is in
 | [`docs/porting_playbook.md`](docs/porting_playbook.md) | Strict step-by-step port checklist with verify commands |
 | [`docs/run_manifest_reference.md`](docs/run_manifest_reference.md) | Manifest format |
 | [`docs/config_injection_design.md`](docs/config_injection_design.md) | Platform/config/auth model |
-| [`docs/design.md`](docs/design.md) | Why the framework is shaped this way |
-| [`docs/handoff.md`](docs/handoff.md) | Current state of the work |
+| [`docs/design.md`](docs/design.md) | Why the framework is shaped this way + current state of the work |

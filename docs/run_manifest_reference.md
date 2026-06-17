@@ -35,7 +35,7 @@ The runner walks `run.fetchers[]` and invokes each in order. v0.x is serial — 
 | `use` | always | Matches the `name` field in a discovered `fetcher.yaml` |
 | `config` | optional | Config values for this fetcher. The runner injects each key declared in the fetcher's (or its category's) `config_schema` as the env var named there. Overrides platform config. |
 | `secrets` | fetcher has non-`per_target` secrets | Map of `<secret_name>: <reference>` |
-| `targets` | fetcher has at least one **required** target field | Array of target entries. A `supports_targets` fetcher whose target fields are ALL optional may omit `targets[]` — the runner then does a single ambient invocation ("collect where deployed"). All 30 AWS fetchers are this all-optional case. |
+| `targets` | fetcher has at least one **required** target field | Array of target entries. A `supports_targets` fetcher whose target fields are ALL optional may omit `targets[]` — the runner then does a single ambient invocation ("collect where deployed"). All 79 AWS fetchers are this all-optional case. |
 
 ---
 

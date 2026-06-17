@@ -6,9 +6,9 @@ customer tools (Okta, AWS, GitLab, etc.) and produce JSON evidence files
 that get uploaded to Paramify.
 
 ## Current state
-Pre-1.0. 58 fetchers ported across 8 categories (aws 30, okta 8, sentinelone 5,
+Pre-1.0. 107 fetchers ported across 8 categories (aws 79, okta 8, sentinelone 5,
 knowbe4 4, gitlab 3, k8s 3, rippling 3, checkov 2); the AWS category is complete
-and all 30 are region/profile fanout where `profile` and `region` are OPTIONAL —
+and all 79 are region/profile fanout where `profile` and `region` are OPTIONAL —
 omit targets (or omit profile/region on a target) and the fetcher collects the
 ambient account/region via the AWS CLI credential chain ("collect where
 deployed"); set a `profile:` per target for multi-account assume-role fanout.
@@ -18,8 +18,8 @@ Every fetcher carries an `evidence_set` block
 Ported fetchers are version 0.x and write raw evidence payloads; the runner
 wraps each output file in the standard evidence envelope (`schema_version` +
 `metadata` + `payload`, see `docs/envelope_design.md`). The Paramify evidence
-uploader is built (`uploaders/paramify_evidence/`). See `docs/handoff.md` for
-the current state-of-the-work breakdown and `docs/design.md` for the rationale.
+uploader is built (`uploaders/paramify_evidence/`). See `docs/design.md` for
+the rationale and the current state-of-the-work breakdown.
 
 ## Key design decisions
 - Fetchers run on customer infrastructure, not Paramify infra

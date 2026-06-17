@@ -2,7 +2,7 @@
 
 Somewhere right now, a security engineer is screenshotting an admin console because an auditor asked them to prove every employee account belongs to a current employee. Next quarter, another auditor will ask again, and they'll screenshot it again. This repo exists to delete that ritual: small scripts called **fetchers** pull evidence from the tools a customer already runs — Okta, AWS, GitLab, Rippling — and write it to disk as JSON, where a separate uploader ships it to Paramify.
 
-You're joining this codebase, and it has 58 fetchers. The wrong way in is reading all of them. The right way in is following *one* — from its YAML self-description, through the runner that executes it, to the enveloped evidence file it leaves on disk — until you could explain each handoff to the next new dev.
+You're joining this codebase, and it has 107 fetchers. The wrong way in is reading all of them. The right way in is following *one* — from its YAML self-description, through the runner that executes it, to the enveloped evidence file it leaves on disk — until you could explain each handoff to the next new dev.
 
 By the end of this part, you'll have the `paramify` CLI installed, a complete collection run sitting in a `run-<timestamp>/` directory, and a working mental model of the four pieces and the contract that binds them. You will not need credentials for any of it — we run the whole pipeline against a fake API token on purpose, because the wiring is the lesson, not the data.
 
@@ -13,7 +13,7 @@ A traced, inspected run. You'll install the CLI from this repo, build a scratch 
 ## Prerequisites
 
 - **Python 3.10+** — `pyproject.toml` requires `>=3.10`; this guide was written and verified against Python 3.14.5.
-- A clone of `paramify-fetchers`, on a branch current with this guide (written against `aws-multi-account-eks`).
+- A clone of `paramify-fetchers`, on `main`.
 - A virtualenv. Commands below assume it's activated.
 - **No credentials.** Deliberately. Everything in this part runs with `RIPPLING_API_TOKEN=fake`.
 - Comfort reading Python and YAML.
@@ -41,7 +41,7 @@ flowchart LR
   UP --> PA[Paramify]
 ```
 
-Why so strict? The previous generation of fetchers were freeform scripts, each inventing its own conventions for config, secrets, and output — which is why none of them composed and the central catalog was maintained by hand (`README.md`, "Why the design is strict"; rationale in `docs/design.md`). The fix was one contract, enforced by JSON Schema at discovery time: anything not in the schema is not a thing a fetcher can do. That rigidity is what lets the runner treat all 58 identically.
+Why so strict? The previous generation of fetchers were freeform scripts, each inventing its own conventions for config, secrets, and output — which is why none of them composed and the central catalog was maintained by hand (`README.md`, "Why the design is strict"; rationale in `docs/design.md`). The fix was one contract, enforced by JSON Schema at discovery time: anything not in the schema is not a thing a fetcher can do. That rigidity is what lets the runner treat all 107 identically.
 
 The contract is abstract until you've watched it execute. Install the CLI and let's count what it discovers.
 
@@ -57,7 +57,7 @@ paramify list
 The editable install registers one console command, `paramify` (`pyproject.toml`, `[project.scripts]`), and `list` should report:
 
 ```
-Discovered 58 fetchers:
+Discovered 107 fetchers:
 
   aws_auto_scaling_high_availability                 v0.1.0    [fanout] category=aws
   aws_backup_recovery_high_availability              v0.1.0    [fanout] category=aws
@@ -68,7 +68,7 @@ Discovered 58 fetchers:
 Where does that list come from? Discovery (`framework/config_loader.py`) walks `fetchers/<category>/<short_name>/` looking for `fetcher.yaml` files, validates each against `framework/schemas/fetcher_schema.json`, and refuses duplicates by name. Every front-end — the CLI, its `--json` mode, the `paramify tui` terminal UI — goes through one facade, `framework/api.py`, so they can't disagree about what exists.
 
 > [!ASIDE]
-> If you count `fetcher.yaml` files on disk you'll get 61 and briefly question the README. Discovery skips any directory starting with `_` — `_template/`, `_categories/`, and per-category `_shared/` — so three of those files are invisible to the runner. The underscore *is* the off switch.
+> If you count `fetcher.yaml` files on disk you'll get 108 and briefly question the README. Discovery skips any directory starting with `_` — `_template/`, `_categories/`, and per-category `_shared/` — so the one under `_template/` is invisible to the runner. The underscore *is* the off switch.
 
 Now ask the catalog about the fetcher we'll be tracing:
 
@@ -257,7 +257,7 @@ _run_metadata.json → /tmp/tour/evidence/run-2026-06-10T18-54-38Z/_run_metadata
 
 The run directory is named `run-<UTC timestamp>` (colons swapped for hyphens — colons are unwelcome in filenames). Look inside and you'll find the answer to the prediction: `rippling_current_employees.json` exists, *and* it no longer looks like what the fetcher wrote. The runner wrapped it.
 
-This is the **evidence envelope** — the custody label on the bag. Every output file gets wrapped in `{schema_version, metadata, payload}` (`framework/runner/envelope.py`, `schema_version: "1.0"`); the wrapping is idempotent, so an already-enveloped file is left alone. Here's the actual file from this run, trimmed:
+This is the **evidence envelope** — the custody label on the bag. Every output file gets wrapped in `{schema_version, metadata, payload}` (`framework/envelope.py`, `schema_version: "1.0"`); the wrapping is idempotent, so an already-enveloped file is left alone. Here's the actual file from this run, trimmed:
 
 ```json
 {
@@ -325,7 +325,7 @@ ls /tmp/tour/evidence/run-*/
 
 You've read the contract from both sides; in Part 2 you sign it. We'll copy `fetchers/_template/` into a new category, fill in a `fetcher.yaml` the discovery layer accepts, write the collection script with a failure ledger that can defend itself, and take it through the same smoke-test-then-runner gauntlet — the same path as `docs/porting_playbook.md`, but with the reasoning attached. The open question to carry there: of everything `rippling_current_employees` does, which parts were *contract* and which were merely *convention*?
 
-Before the exercises, one question, two sentences, in your own words: why does the *runner* write the envelope, when the fetcher already knows everything about its own run? The answer that satisfies a skeptical colleague explains what would go wrong across 58 fetchers — and on customer infrastructure — if each script wrapped its own output.
+Before the exercises, one question, two sentences, in your own words: why does the *runner* write the envelope, when the fetcher already knows everything about its own run? The answer that satisfies a skeptical colleague explains what would go wrong across 107 fetchers — and on customer infrastructure — if each script wrapped its own output.
 
 ## Exercises
 
@@ -337,7 +337,7 @@ Before the exercises, one question, two sentences, in your own words: why does t
 
 ## Sources
 
-This part was researched directly from the repository working tree (branch `aws-multi-account-eks`, June 10, 2026); all command outputs shown were captured live from `paramify list`, `describe`, `manifest`, `validate`, `run`, the fake-credential smoke test, and `pytest`.
+This part was researched directly from the repository working tree (branch `main`, June 10, 2026); all command outputs shown were captured live from `paramify list`, `describe`, `manifest`, `validate`, `run`, the fake-credential smoke test, and `pytest`.
 
 **Repository docs**
 
@@ -351,5 +351,5 @@ This part was researched directly from the repository working tree (branch `aws-
 5. `fetchers/_categories/rippling.yaml` — platform-wide config (`base_url`, `page_size`) and its env injection.
 6. `framework/runner/executor.py` — the 7-var env whitelist, `PYTHONUNBUFFERED`/`EVIDENCE_DIR` injection, the 600s default timeout, and exit code 124.
 7. `framework/secret_resolver.py` — the `${env:VAR_NAME}` reference form.
-8. `framework/api.py`, `framework/config_loader.py`, `framework/runner/envelope.py`, `framework/schemas/fetcher_schema.json` — facade surface, discovery and `_`-skip rule, envelope wrapping (`schema_version: "1.0"`), and required vs. optional fetcher fields.
+8. `framework/api.py`, `framework/config_loader.py`, `framework/envelope.py`, `framework/schemas/fetcher_schema.json` — facade surface, discovery and `_`-skip rule, envelope wrapping (`schema_version: "1.0"`), and required vs. optional fetcher fields.
 9. `examples/minimal_run.yaml` — the manifest shape for single and fan-out fetchers.

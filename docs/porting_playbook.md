@@ -43,7 +43,7 @@ ls fetchers/<category>/_shared/ 2>/dev/null && echo "category has shared code" |
 
 - **`<short_name>`** — source filename minus the `<category>_` prefix and `.py`/`.sh` extension (e.g. `okta_phishing_resistant_mfa.py` → `phishing_resistant_mfa`)
 - **Globally-unique name** — `<category>_<short_name>` (this is the `name:` field in `fetcher.yaml`; the directory is the short_name only)
-- **Fanout?** — if the source iterates over targets internally (loop over projects, regions, hosts) OR env vars look per-target (`*_PROJECT_ID`, `*_REGION_*`), it's a fanout candidate. All 30 AWS fetchers are fanout; see the AWS fanout section below for the region/profile target shape.
+- **Fanout?** — if the source iterates over targets internally (loop over projects, regions, hosts) OR env vars look per-target (`*_PROJECT_ID`, `*_REGION_*`), it's a fanout candidate. All 79 AWS fetchers are fanout; see the AWS fanout section below for the region/profile target shape.
 
 ---
 
@@ -391,18 +391,20 @@ These are tracked, not surprises. Don't try to fix them mid-port:
 
 ## AWS fanout shape
 
-All 30 AWS fetchers are fanout, but `profile` and `region` are OPTIONAL
+All 79 AWS fetchers are fanout, but `profile` and `region` are OPTIONAL
 `target_schema` fields on every AWS fetcher. Omit them — or omit `targets[]`
 entirely — and the fetcher collects the ambient account/region via the AWS CLI
 credential chain ("collect where deployed"); set `profile:`/`region:` per
 target for multi-account / multi-region assume-role fanout, where a target's
 values override the ambient defaults. There are three flavors:
 
-- **Regional (22 fetchers)** — `target_schema` is `{region optional, profile
+- **Regional (64 fetchers)** — `target_schema` is `{region optional, profile
   optional}`; the runner invokes the fetcher once per `(region, profile)`
   target and the output filename is `aws_<short>_<profile>_<region>.json`.
-- **Global → profile-only fanout (5 fetchers)** — `iam_roles`, `iam_policies`,
-  `iam_users_groups`, `route53_high_availability`, `s3_encryption_status`.
+- **Global → profile-only fanout (12 fetchers)** — `iam_roles`, `iam_policies`,
+  `iam_users_groups`, `iam_mfa_status`, `iam_password_policy`, `organizations_scp`,
+  `route53_high_availability`, `s3_encryption_status`, `cloudfront_distribution_security`,
+  `shield_dos_protection`, `global_accelerator_ha`, `resource_inventory`.
   `region` is optional (defaults `us-east-1`); fan out on profile only, output
   `aws_<short>_<profile>.json`.
 - **Mixed-scope (3 fetchers, flagged not split)** — `backup_validation`,

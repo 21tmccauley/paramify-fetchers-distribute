@@ -29,7 +29,7 @@ kubectl create secret generic aws-cli --from-file=credentials=/tmp/aws-credentia
 
 # 2. Upload token + the manifest.
 kubectl create secret generic paramify-upload --from-literal=PARAMIFY_UPLOAD_API_TOKEN=<token>
-kubectl create configmap aws-manifest --from-file=aws.yaml=deploy/manifests/aws.yaml
+kubectl create configmap aws-manifest --from-file=aws-ambient.yaml=manifests/aws-ambient.yaml
 ```
 
 In [`cronjob-aws.yaml`](cronjob-aws.yaml) uncomment the **LOCAL ONLY** `aws-cli`
@@ -87,8 +87,9 @@ flowchart TB
 3. **Profile map** — fill [`aws-config.configmap.yaml`](aws-config.configmap.yaml):
    `[profile home]` = HomeRole + the IRSA token file; one `[profile <name>]` per
    account = its TargetRole, `source_profile = home`. Apply it.
-4. **Manifest** — give each fetcher a `profile:` per account (see the commented
-   block in [`../manifests/aws.yaml`](../manifests/aws.yaml)).
+4. **Manifest** — give each fetcher a `profile:` per account (see
+   [`../../manifests/aws-multi-region.yaml`](../../manifests/aws-multi-region.yaml)),
+   and point the CronJob's ConfigMap + `args` at it instead of `aws-ambient.yaml`.
 5. **Image** — point at your registry (PROD SWAP #2), unsuspend the CronJob.
 
 ### What the CLI actually does (per target)

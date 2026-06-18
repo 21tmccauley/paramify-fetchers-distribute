@@ -3,10 +3,10 @@
 #   build      : docker compose -f deploy/docker-compose.yml build
 #   sanity     : docker compose -f deploy/docker-compose.yml run --rm collector paramify list
 #   collect    : docker compose -f deploy/docker-compose.yml run --rm collector \
-#                    ./deploy/run-and-upload.sh daily
+#                    ./deploy/run-and-upload.sh manifests/minimal.yaml
 #   explore TUI: docker compose -f deploy/docker-compose.yml run --rm collector paramify tui
 #   shell      : docker compose -f deploy/docker-compose.yml run --rm collector bash
-#   schedule   : docker compose -f deploy/docker-compose.yml up scheduler   # cron cadence
+#   schedule   : docker compose -f deploy/docker-compose.yml up scheduler   # cron schedule
 #   logs       : docker compose -f deploy/docker-compose.yml logs -f scheduler
 #
 # Collected evidence appears on the host in ./evidence (repo root).
@@ -31,7 +31,7 @@ services:
     <<: *collector
     command: ["paramify", "list"]
 
-  # Long-running: cron runs the cadences in deploy/crontab.
+  # Long-running: cron runs the schedule in deploy/crontab.
   scheduler:
     <<: *collector
     command: ["scheduler"]

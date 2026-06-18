@@ -1,6 +1,6 @@
 # Deploying the fetchers in a container (beta)
 
-A hand-rolled Docker bundle for running the fetchers on a cadence and uploading
+A hand-rolled Docker bundle for running the fetchers on a schedule and uploading
 the evidence to Paramify. It's deliberately simple so you can poke at it and see
 how the pieces fit — it's also the template the future `paramify package` command
 would generate.
@@ -18,10 +18,13 @@ is a guided run against a test AWS Secrets Manager secret.
 | `Dockerfile` | The image: Python + the tool + the system binaries fetchers need (`jq`, `aws`, `kubectl`, `git`, `curl`, `checkov`) |
 | `docker-compose.yml` | Two services: `collector` (run-and-exit) and `scheduler` (cron) |
 | `entrypoint.sh` | Runs whatever command you pass; `scheduler` mode starts cron |
-| `crontab` | The cadence schedule (daily / weekly) |
+| `crontab` | The schedule — maps a time to a manifest path |
 | `run-and-upload.sh` | Chains `paramify run <manifest>` → upload to Paramify |
-| `manifests/{daily,weekly}.yaml` | **Example** cadence manifests — edit to your stack |
 | `.env.example` | Template for the secrets you inject at run time |
+
+Manifests are **not** kept here — there's one source, the repo-root `manifests/`
+(the same folder `paramify tui` builds into). Schedule whichever ones you want;
+name them however makes sense to you.
 | `k8s/` | Kubernetes `CronJob`s + a local→EKS walkthrough ([`k8s/LOCAL_K8S.md`](k8s/LOCAL_K8S.md)) and multi-account setup ([`k8s/AWS_MULTI_ACCOUNT.md`](k8s/AWS_MULTI_ACCOUNT.md)) |
 
 ## 1. Configure secrets
@@ -89,11 +92,11 @@ docker compose -f deploy/docker-compose.yml run --rm collector paramify list
 
 # see what a manifest requires (it reports missing secrets/config)
 docker compose -f deploy/docker-compose.yml run --rm collector \
-    paramify run deploy/manifests/daily.yaml
+    paramify run manifests/minimal.yaml
 
-# collect + upload one cadence
+# collect + upload one manifest
 docker compose -f deploy/docker-compose.yml run --rm collector \
-    ./deploy/run-and-upload.sh daily
+    ./deploy/run-and-upload.sh manifests/minimal.yaml
 
 # explore runs/evidence with your own TUI, inside the container
 docker compose -f deploy/docker-compose.yml run --rm collector paramify tui
@@ -105,7 +108,7 @@ docker compose -f deploy/docker-compose.yml run --rm collector bash
 Collected evidence appears on your host in **`./evidence/run-<timestamp>/`** (the
 volume mount), so you can inspect it without entering the container.
 
-## 4. Run it on a cadence
+## 4. Run it on a schedule
 
 ```bash
 docker compose -f deploy/docker-compose.yml up -d scheduler     # cron, per deploy/crontab
@@ -113,8 +116,9 @@ docker compose -f deploy/docker-compose.yml logs -f scheduler   # watch runs
 docker compose -f deploy/docker-compose.yml exec scheduler bash # get inside it
 ```
 
-Edit `deploy/crontab` to change cadences and `deploy/manifests/*.yaml` to change
-what runs. Times are **UTC** (the container clock).
+Edit `deploy/crontab` to change the schedule (each line maps a time to a manifest
+path under `manifests/`); edit the manifests in `manifests/` to change what runs.
+Times are **UTC** (the container clock).
 
 ## Walk through it end-to-end on your laptop (Docker Desktop + a test AWS secret)
 
@@ -154,18 +158,18 @@ pf run --rm collector bash -lc '[ -n "$PARAMIFY_UPLOAD_API_TOKEN" ] && echo "sec
 
 # 5. Run a collection and look at the evidence (appears on your host).
 pf run --rm collector paramify list
-pf run --rm collector paramify run deploy/manifests/daily.yaml
+pf run --rm collector paramify run manifests/minimal.yaml
 ls -R evidence/
 
 # 6. (Optional) Full chain — collect AND upload. Hits real Paramify; uses
 #    PARAMIFY_UPLOAD_API_TOKEN from the secret (PARAMIFY_API_BASE_URL defaults to stage).
-pf run --rm collector ./deploy/run-and-upload.sh daily
+pf run --rm collector ./deploy/run-and-upload.sh manifests/minimal.yaml
 
 # 7. Confirm no secrets are baked into the image (prints nothing = good).
 docker run --rm paramify-fetchers:beta sh -c 'find / -name ".env" 2>/dev/null' || true
 ```
 
-Point `deploy/manifests/daily.yaml` at a fetcher whose creds are in your test
+Point a manifest in `manifests/` at a fetcher whose creds are in your test
 secret. A fetcher that reaches a real tool and **fails with 401/DNS** still proves
 the secret plumbing works — exit 0 with empty data would be the bug. If upload
 ingestion rejects the file, try `artifact_payload: payload` in an uploader config
@@ -178,7 +182,7 @@ You don't SSH in — use Docker:
 | Want to… | Command |
 |---|---|
 | Get a shell | `docker compose -f deploy/docker-compose.yml exec scheduler bash` |
-| Run something once | `... run --rm collector paramify run deploy/manifests/daily.yaml` |
+| Run something once | `... run --rm collector paramify run manifests/minimal.yaml` |
 | See output | `... logs -f scheduler` |
 | Open the TUI inside | `... run --rm collector paramify tui` |
 | Get evidence out | it's already on the host in `./evidence/` (or `docker cp`) |
@@ -214,7 +218,7 @@ You don't SSH in — use Docker:
 - **Pin the source.** This image `COPY`s your working tree. For reproducible
   customer images, build from a tagged commit.
 - **Prefer compose/K8s scheduling for production.** In-container cron is fine for
-  a single host; on Kubernetes use a `CronJob` per cadence (same image, secrets
+  a single host; on Kubernetes use a `CronJob` per manifest (same image, secrets
   via K8s Secrets, AWS via IRSA). Apply-and-watch YAML + a local walkthrough live
   in [`k8s/`](k8s/) ([`k8s/LOCAL_K8S.md`](k8s/LOCAL_K8S.md)). For the AWS fetchers
   specifically — ambient single-account vs. multi-account hub-and-spoke (IRSA +

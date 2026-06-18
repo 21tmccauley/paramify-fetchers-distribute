@@ -1,9 +1,14 @@
-# Cadence schedule for the scheduler service. Times are UTC (container clock).
+# Schedule for the scheduler service. Times are UTC (container clock).
 # SHELL+BASH_ENV make each job a bash shell that restores the container env
 # (cron strips it); >/proc/1/fd/{1,2} sends output to `docker logs`.
 SHELL=/bin/bash
 BASH_ENV=/tmp/container-env.sh
 
+# Each line maps a TIME to a MANIFEST (a path under ./manifests/). These are
+# EXAMPLES — edit them to your manifests and the cadence you want. Build/test a
+# manifest with `paramify tui` (or `paramify run manifests/<name>.yaml`), then
+# point a line here at it.
+#
 # min  hour  dom  mon  dow   command
-0     2     *    *    *      cd /app && ./deploy/run-and-upload.sh daily  >/proc/1/fd/1 2>/proc/1/fd/2
-0     3     *    *    1      cd /app && ./deploy/run-and-upload.sh weekly >/proc/1/fd/1 2>/proc/1/fd/2
+0     2     *    *    *      cd /app && ./deploy/run-and-upload.sh manifests/minimal.yaml >/proc/1/fd/1 2>/proc/1/fd/2
+# 0   3     *    *    1      cd /app && ./deploy/run-and-upload.sh manifests/aws-ambient.yaml >/proc/1/fd/1 2>/proc/1/fd/2

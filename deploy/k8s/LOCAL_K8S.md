@@ -28,8 +28,13 @@ real EKS** — the two prod differences are flagged as `PROD SWAP #1/#2` in
 The `aws-creds` Secret is **not** for an AWS fetcher. Its only job is to let the
 entrypoint read AWS Secrets Manager (exactly like the Docker run in
 [`../README.md`](../README.md)), which hydrates the
-`OKTA_*` + `PARAMIFY_UPLOAD_API_TOKEN` the `daily.yaml` manifest references. On
+`OKTA_*` + `PARAMIFY_UPLOAD_API_TOKEN` the `minimal.yaml` manifest references. On
 EKS, IRSA replaces those static creds — that's SWAP #1.
+
+> This walkthrough schedules `manifests/minimal.yaml`, which collects an Okta
+> target plus two GitLab targets. Without `GITLAB_TOKEN_*` in your secret the
+> GitLab targets just report a missing secret — harmless for proving the
+> plumbing. Point the CronJob at any manifest in `manifests/` you like.
 
 ## Prerequisites
 
@@ -63,19 +68,19 @@ kubectl create secret generic aws-creds \
 ## 2. Create the manifest ConfigMap
 
 This is the step that bit earlier — the flag is `--from-file=KEY=PATH`, with an
-**`=`** (not `/`) between the key and the path, and the path is **`deploy/manifests/...`**
+**`=`** (not `/`) between the key and the path, and the path is **`manifests/...`**
 from the repo root:
 
 ```bash
-kubectl create configmap daily-manifest \
-  --from-file=daily.yaml=deploy/manifests/daily.yaml
+kubectl create configmap paramify-manifest \
+  --from-file=minimal.yaml=manifests/minimal.yaml
 ```
 
-`daily.yaml` is the key (the filename the Pod sees); `deploy/manifests/daily.yaml`
+`minimal.yaml` is the key (the filename the Pod sees); `manifests/minimal.yaml`
 is the file on disk. Verify it landed:
 
 ```bash
-kubectl describe configmap daily-manifest      # shows a `daily.yaml:` data key
+kubectl describe configmap paramify-manifest   # shows a `minimal.yaml:` data key
 ```
 
 This is the "manifest via ConfigMap" lesson: edit the ConfigMap (or recreate it
@@ -89,7 +94,7 @@ Point `PARAMIFY_SECRETS_ID` at your real SM secret first (edit the value in
 ```bash
 kubectl apply -f deploy/k8s/cronjob.yaml
 # if you didn't edit the file, set your secret id now:
-kubectl set env cronjob/paramify-daily PARAMIFY_SECRETS_ID=<your-sm-secret-id-or-arn>
+kubectl set env cronjob/paramify-collector PARAMIFY_SECRETS_ID=<your-sm-secret-id-or-arn>
 ```
 
 The CronJob is created **suspended** (`suspend: true`) so it won't fire on the
@@ -98,7 +103,7 @@ The CronJob is created **suspended** (`suspend: true`) so it won't fire on the
 ## 4. Trigger a run on demand
 
 ```bash
-kubectl create job --from=cronjob/paramify-daily test-1
+kubectl create job --from=cronjob/paramify-collector test-1
 ```
 
 ## 5. Watch the lifecycle
@@ -119,8 +124,8 @@ kubectl logs -f job/test-1
 
 You should see, in order:
 1. `[entrypoint] loading secrets from AWS Secrets Manager: …` — the static creds reading SM
-2. `==> [daily] collect: deploy/manifests/daily.yaml` — `paramify run` over the ConfigMap manifest
-3. `==> [daily] upload latest run -> https://stage.paramify.com/api/v0` — the uploader
+2. `==> collect: manifests/minimal.yaml` — `paramify run` over the ConfigMap manifest
+3. `==> upload latest run -> https://stage.paramify.com/api/v0` — the uploader
 
 > A fetcher that reaches a real tool and **fails with 401/DNS** still proves the
 > plumbing (secret hydration → collect → upload). Exit 0 with empty data would be
@@ -137,7 +142,7 @@ You should see, in order:
 
 ```bash
 kubectl delete -f deploy/k8s/cronjob.yaml          # CronJob + ServiceAccount
-kubectl delete configmap daily-manifest
+kubectl delete configmap paramify-manifest
 kubectl delete secret aws-creds
 kubectl delete job test-1                           # if it's still around
 # and: kind delete cluster   (or disable Docker Desktop → Kubernetes)
@@ -189,5 +194,5 @@ SM → a K8s Secret → `envFrom` — see [`../README.md`](../README.md) option 
 | Pod stuck `CreateContainerConfigError` | A referenced Secret/ConfigMap is missing. `kubectl describe pod <name>` names it — you skipped step 1 or 2. |
 | `[entrypoint] ERROR: cannot read secret …` | AWS creds expired or wrong region → recreate `aws-creds` (step 1); or wrong `PARAMIFY_SECRETS_ID`. |
 | `secret … must be a flat JSON object` | The SM secret isn't `{"VAR":"value", …}` — fix the secret's shape. |
-| Fetcher logs "missing secret" | A `${env:VAR}` in `daily.yaml` has no matching key in your SM secret — align the names. |
+| Fetcher logs "missing secret" | A `${env:VAR}` in `minimal.yaml` has no matching key in your SM secret — align the names. |
 | k9s shows nothing | You're on the empty `default` namespace before triggering, or looking at `kube-system`. Trigger step 4, then watch `default`. |

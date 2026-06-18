@@ -9,7 +9,7 @@
 #
 # Apply order:
 #   kubectl create secret generic paramify-upload --from-literal=PARAMIFY_UPLOAD_API_TOKEN=...
-#   kubectl create configmap aws-manifest --from-file=aws.yaml=deploy/manifests/aws.yaml
+#   kubectl create configmap aws-manifest --from-file=aws-ambient.yaml=manifests/aws-ambient.yaml
 #   kubectl apply -f deploy/k8s/aws-config.configmap.yaml      # multi-account only (harmless otherwise)
 #   kubectl apply -f deploy/k8s/cronjob-aws.yaml
 #   kubectl create job --from=cronjob/paramify-aws test-1      # trigger now
@@ -31,7 +31,7 @@ kind: CronJob
 metadata:
   name: paramify-aws
 spec:
-  schedule: "0 2 * * *"            # 02:00 UTC daily
+  schedule: "0 2 * * *"            # 02:00 UTC — pick the cadence you want
   suspend: true                    # manual-trigger only for the walkthrough; unset for a real cadence
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
@@ -52,8 +52,8 @@ spec:
               image: paramify-fetchers:beta
               imagePullPolicy: Never
               # Keep the image ENTRYPOINT; this overrides only the CMD. Collect the
-              # AWS cadence manifest, then upload (same glue as the Docker scheduler).
-              args: ["./deploy/run-and-upload.sh", "aws"]
+              # AWS manifest, then upload (same glue as the Docker scheduler).
+              args: ["./deploy/run-and-upload.sh", "manifests/aws-ambient.yaml"]
               env:
                 # Region for ambient/global calls when a target doesn't set one.
                 - name: AWS_REGION
@@ -67,8 +67,8 @@ spec:
                 # The manifest comes from a ConfigMap (edit + re-trigger to change
                 # what's collected, no rebuild). Overlays the baked-in example.
                 - name: manifest
-                  mountPath: /app/deploy/manifests/aws.yaml
-                  subPath: aws.yaml
+                  mountPath: /app/manifests/aws-ambient.yaml
+                  subPath: aws-ambient.yaml
                   readOnly: true
                 # Multi-account assume-role profile map. Harmless for the ambient
                 # single-account case. subPath keeps /root/.aws writable for the

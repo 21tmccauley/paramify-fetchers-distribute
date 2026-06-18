@@ -1,4 +1,4 @@
-# Paramify fetchers on Kubernetes — daily collect→upload as an ephemeral Pod.
+# Paramify fetchers on Kubernetes — scheduled collect→upload as an ephemeral Pod.
 #
 # This is the LOCAL (kind / Docker Desktop) shape. ~90% of it is identical to
 # what runs on EKS; the only two prod changes are flagged inline as
@@ -8,10 +8,10 @@
 #   1. kubectl create secret generic aws-creds \
 #          --from-literal=AWS_ACCESS_KEY_ID=... --from-literal=AWS_SECRET_ACCESS_KEY=... \
 #          --from-literal=AWS_SESSION_TOKEN=... --from-literal=AWS_REGION=...
-#   2. kubectl create configmap daily-manifest \
-#          --from-file=daily.yaml=deploy/manifests/daily.yaml      # note: KEY=PATH, '=' not '/'
+#   2. kubectl create configmap paramify-manifest \
+#          --from-file=minimal.yaml=manifests/minimal.yaml         # note: KEY=PATH, '=' not '/'
 #   3. (edit PARAMIFY_SECRETS_ID below) kubectl apply -f deploy/k8s/cronjob.yaml
-#   4. kubectl create job --from=cronjob/paramify-daily test-1     # trigger now, don't wait for 02:00
+#   4. kubectl create job --from=cronjob/paramify-collector test-1 # trigger now, don't wait for 02:00
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -28,9 +28,9 @@ metadata:
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: paramify-daily
+  name: paramify-collector
 spec:
-  schedule: "0 2 * * *"            # 02:00 UTC daily — same as deploy/crontab.
+  schedule: "0 2 * * *"            # 02:00 UTC — pick the cadence you want.
   suspend: true                    # manual-trigger only for this exercise (no surprise
                                    # 02:00 run). Set false / remove for a real cadence.
   concurrencyPolicy: Forbid        # never overlap a still-running collection
@@ -56,7 +56,7 @@ spec:
               #   (a) hydrates secrets from AWS Secrets Manager when PARAMIFY_SECRETS_ID is set, and
               #   (b) defaults PARAMIFY_API_BASE_URL (https://stage.paramify.com/api/v0).
               # Setting `args` overrides only the CMD, so the entrypoint runs this:
-              args: ["./deploy/run-and-upload.sh", "daily"]
+              args: ["./deploy/run-and-upload.sh", "manifests/minimal.yaml"]
               env:
                 # The SM secret (a flat JSON object of VAR->value) the entrypoint
                 # hydrates — PARAMIFY_UPLOAD_API_TOKEN, OKTA_API_TOKEN, OKTA_ORG_URL, …
@@ -81,8 +81,8 @@ spec:
                 # edit the ConfigMap + re-trigger to change what's collected — no
                 # rebuild. This overlays the example baked at the same path.
                 - name: manifest
-                  mountPath: /app/deploy/manifests/daily.yaml
-                  subPath: daily.yaml
+                  mountPath: /app/manifests/minimal.yaml
+                  subPath: minimal.yaml
                   readOnly: true
                 # Transient scratch for collected evidence: written here, shipped to
                 # Paramify by run-and-upload.sh, then GONE when the Pod ends. There is
@@ -96,6 +96,6 @@ spec:
           volumes:
             - name: manifest
               configMap:
-                name: daily-manifest
+                name: paramify-manifest
             - name: evidence
               emptyDir: {}

@@ -3,7 +3,7 @@
 # Container entrypoint. Two roles:
 #   1. Pass-through runner  — `docker compose run --rm collector paramify run ...`
 #      (also: bash, paramify tui, python ..., anything). This is the default.
-#   2. Scheduler            — `... scheduler` runs cron on a cadence (see crontab).
+#   2. Scheduler            — `... scheduler` runs cron on the schedule in crontab.
 #
 set -euo pipefail
 cd /app
@@ -68,12 +68,12 @@ case "${1:-}" in
     ;;
   ""|-h|--help)
     echo "usage: <command>            run any command (default: paramify list)"
-    echo "       scheduler            run cron on the cadence in deploy/crontab"
+    echo "       scheduler            run cron on the schedule in deploy/crontab"
     echo
     echo "examples:"
     echo "   docker compose run --rm collector paramify list"
-    echo "   docker compose run --rm collector paramify run deploy/manifests/daily.yaml"
-    echo "   docker compose run --rm collector ./deploy/run-and-upload.sh daily"
+    echo "   docker compose run --rm collector paramify run manifests/minimal.yaml"
+    echo "   docker compose run --rm collector ./deploy/run-and-upload.sh manifests/minimal.yaml"
     echo "   docker compose run --rm collector paramify tui"
     echo "   docker compose run --rm collector bash"
     exec paramify list

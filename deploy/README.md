@@ -203,6 +203,7 @@ You don't SSH in — use Docker:
 | `secret … must be a flat JSON object` | The secret isn't `{"VAR":"value", …}` — fix its shape |
 | Fetcher exits with "missing secret" | A `${env:VAR}` in the manifest has no matching key in the secret — align the names |
 | Evidence not on host | Run from the repo root so `./evidence` maps correctly |
+| `unzip` / `bad CRC` during image build (aws-cli step) | Corrupted download of the ~50MB AWS CLI zip — common on fresh Docker Desktop installs. Retry the build; if it persists, `docker builder prune -f` then rebuild. The Dockerfile retries and tests the zip before installing. |
 
 ## Before you hand this to customers
 

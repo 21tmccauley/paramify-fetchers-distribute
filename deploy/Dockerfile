@@ -17,13 +17,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 # aws-cli v2 — not on pip; use the official installer (arch-aware).
+# Retry + unzip -t: flaky Docker Desktop networking can corrupt the ~50MB zip
+# (unzip then fails with "bad CRC" even though curl exits 0).
 RUN set -eux; \
     case "$(uname -m)" in \
       x86_64)  url="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" ;; \
       aarch64) url="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" ;; \
       *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL "$url" -o /tmp/awscliv2.zip; \
+    for attempt in 1 2 3 4 5; do \
+      curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 "$url" -o /tmp/awscliv2.zip \
+        && unzip -t /tmp/awscliv2.zip >/dev/null \
+        && break; \
+      rm -f /tmp/awscliv2.zip; \
+      if [ "$attempt" -eq 5 ]; then echo "awscli zip download or integrity check failed" >&2; exit 1; fi; \
+      sleep 2; \
+    done; \
     unzip -q /tmp/awscliv2.zip -d /tmp; \
     /tmp/aws/install; \
     rm -rf /tmp/aws /tmp/awscliv2.zip

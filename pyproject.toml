@@ -45,3 +45,12 @@ paramify = "framework.cli:app"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["framework*"]
+
+# pytest: scope collection to the framework test suite. Per-fetcher tests/ dirs
+# (e.g. the _template scaffold) are placeholders with no settled convention yet;
+# without testpaths a bare `pytest` walks the whole tree and aborts at collection
+# on duplicate test_fetcher.py basenames. importlib import-mode additionally makes
+# duplicate basenames safe if a path outside tests/ is ever collected explicitly.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"

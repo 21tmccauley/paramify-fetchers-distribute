@@ -10,7 +10,7 @@
 # Apply order:
 #   kubectl create secret generic paramify-upload --from-literal=PARAMIFY_UPLOAD_API_TOKEN=...
 #   kubectl create configmap aws-manifest --from-file=aws_ambient.yaml=examples/aws_ambient.yaml
-#   kubectl apply -f deploy/k8s/aws-config.configmap.yaml      # multi-account only (harmless otherwise)
+#   kubectl apply -f deploy/k8s/aws-config.configmap.yaml      # multi-account only (safe to skip — the cronjob mounts it optionally)
 #   kubectl apply -f deploy/k8s/cronjob-aws.yaml
 #   kubectl create job --from=cronjob/paramify-aws test-1      # trigger now
 ---
@@ -71,9 +71,10 @@ spec:
                   mountPath: /app/examples/aws_ambient.yaml
                   subPath: aws_ambient.yaml
                   readOnly: true
-                # Multi-account assume-role profile map. Harmless for the ambient
-                # single-account case. subPath keeps /root/.aws writable for the
-                # CLI's credential cache.
+                # Multi-account assume-role profile map. Optional (see the volume
+                # below): a single-account ambient run never reads it, so the
+                # aws-config ConfigMap may be skipped entirely. subPath keeps
+                # /root/.aws writable for the CLI's credential cache.
                 - name: aws-config
                   mountPath: /root/.aws/config
                   subPath: config
@@ -99,6 +100,10 @@ spec:
             - name: aws-config
               configMap:
                 name: aws-config
+                # optional: a single-account ambient run never reads this file, so
+                # an absent ConfigMap must NOT block Pod startup. Without this the
+                # Pod fails with CreateContainerConfigError when aws-config is skipped.
+                optional: true
             # - name: aws-cli          # LOCAL ONLY — see the commented mount above
             #   secret:
             #     secretName: aws-cli

@@ -44,7 +44,10 @@ the rationale and the current state-of-the-work breakdown.
 ## Fetcher schema
 Required: name, version, description, runtime, output, secrets.
 Optional: category, config_schema, supports_targets, target_schema,
-depends_on. Plus optional sub-fields: output.aggregation,
+depends_on, ksis (FedRAMP 20x KSI ids the evidence speaks to, 1+),
+validators (regex checks over the evidence payload; each entry
+{id, regex, proves?, failure_modes?}). Plus optional sub-fields:
+output.aggregation,
 secrets[].per_target, target_schema.<field>.env (for fanout fetchers),
 config_schema.<field>.env (runner injects the value as that env var),
 runtime.timeout (per-invocation cap in seconds, default 600).

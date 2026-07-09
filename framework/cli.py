@@ -442,8 +442,8 @@ def validate_cmd(
         typer.echo(json.dumps({"ok": not errors, "errors": errors}, indent=2))
         raise typer.Exit(0 if not errors else 1)
     if errors:
-        for e in errors:
-            _err(f"  ERROR  {e}")
+        for err in errors:
+            _err(f"  ERROR  {err}")
         raise typer.Exit(1)
     n = len(m.get("run", {}).get("fetchers", []))
     typer.echo(f"OK  manifest valid; {n} fetcher entries")
@@ -525,8 +525,8 @@ def upload_cmd(
         if json_out:
             typer.echo(json.dumps(preflight, indent=2, default=str))
         else:
-            for e in preflight["errors"]:
-                _err(f"  ERROR  {e}")
+            for err in preflight["errors"]:
+                _err(f"  ERROR  {err}")
         raise typer.Exit(1)
 
     try:
@@ -582,8 +582,8 @@ def _save_and_report(manifest: dict, path: Path, root: Path, json_out: bool, *, 
     typer.echo(f"{verb} {path}")
     if errors:
         _err("  (manifest saved but not yet runnable):")
-        for e in errors:
-            _err(f"    {e}")
+        for err in errors:
+            _err(f"    {err}")
 
 
 @manifest_app.command("init")

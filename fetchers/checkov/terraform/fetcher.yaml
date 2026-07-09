@@ -104,6 +104,6 @@ config_schema:
     description: Plan-mode only — combine plan-file graph with the source files.
 
 evidence_set:
-  reference_id: EVD-CHECKOV-TF
+  reference_id: EVD-CHECKOV-TERRAFORM
   name: Checkov Terraform IaC Scan
   instructions: 'Script: checkov_terraform/fetcher.sh. Shallow-clones the target repo and runs the checkov CLI (--framework terraform) over its .tf files, merging default + configured skip-checks/skip-resources, and records passed/failed/skipped checks with repo+commit provenance.'

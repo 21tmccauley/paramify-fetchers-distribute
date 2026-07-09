@@ -515,8 +515,8 @@ def run(
                 fetcher,
                 entry,
                 run_dir,
-                platforms.get(fetcher.category),
-                parsed.platforms.get(fetcher.category),
+                platforms.get(fetcher.category or ""),
+                parsed.platforms.get(fetcher.category or ""),
                 on_line=on_line,
             )
         except (RuntimeError, ValueError) as e:
@@ -815,11 +815,13 @@ def list_manifests(root) -> List[dict]:
         return []
     # Discover the fetcher tree once and reuse it across every manifest's
     # validate() — otherwise the welcome screen re-scans all fetchers per file.
+    fetchers: Optional[dict] = None
+    platforms: Optional[dict] = None
     try:
         fetchers = discover_fetchers(root)
         platforms = discover_platforms(root)
     except Exception:
-        fetchers = platforms = None
+        pass
     summaries = [_manifest_summary(p, root, fetchers, platforms) for p in paths]
     return [s for s in summaries if s is not None]
 

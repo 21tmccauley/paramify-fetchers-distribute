@@ -1,8 +1,11 @@
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/paramify/paramify-fetchers)
-
-
 # Paramify Fetchers
+
+[![CI](https://github.com/paramify/paramify-fetchers/actions/workflows/ci.yml/badge.svg)](https://github.com/paramify/paramify-fetchers/actions/workflows/ci.yml)
+[![License: GPLv3](https://img.shields.io/badge/License-GPLv3-1467ff.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-1467ff.svg)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.2.0-1467ff.svg)](CHANGELOG.md)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/paramify/paramify-fetchers)
 
 Fetchers are small scripts that collect compliance evidence from your infrastructure and write it to disk as JSON. A separate uploader stage pushes that evidence to Paramify. This repo contains the fetchers, the runner that executes them, and the uploader — the fetchers themselves never talk to Paramify directly.
 
@@ -19,6 +22,22 @@ fetcher's contract:
 ---
 
 ## Quick start
+
+### See it work first — no credentials
+
+Curious before wiring up a real service? The bundled demo fetcher emits synthetic
+evidence, so the whole collect → envelope pipeline runs with nothing but Python:
+
+```bash
+git clone https://github.com/paramify/paramify-fetchers.git
+cd paramify-fetchers
+python -m venv .venv && source .venv/bin/activate && pip install -e .
+
+paramify run examples/demo.yaml                    # collect synthetic evidence — no credentials
+paramify evidence evidence/run-*/demo_hello.json   # inspect the enveloped result
+```
+
+Then come back and wire up your real services below.
 
 **Prerequisites:** Python 3.10+. The CLIs your fetchers need (`aws`, `jq`, `curl`, `kubectl`, etc.) must be on your `PATH` — install only what applies to the categories you'll run. Each service's credential setup guide is in `fetchers/<category>/README.md`.
 
@@ -100,6 +119,33 @@ Azure · and more
 
 ---
 
+## FedRAMP 20x coverage
+
+Every fetcher can declare the FedRAMP 20x Key Security Indicators (KSIs) its
+evidence speaks to; `paramify ksi` rolls that up into live coverage (`--json`
+emits the full model, per-KSI):
+
+<!-- BEGIN:ksi-coverage -->
+![FedRAMP 20x KSI coverage](https://img.shields.io/badge/FedRAMP_20x_KSI_coverage-88.2%25-1467ff)
+
+**30 of 34** config-evidenceable KSIs covered — **88.2%** — plus 18 organizational KSIs (evidenced by HR / training / process, not cloud config). Straight from `paramify ksi`; regenerate with `python tools/gen_ksi_coverage.py`.
+
+| Family | Covered | Gaps |
+|---|---|---|
+| Cloud Native Architecture (CNA) | 5 / 7 | `KSI-CNA-04`, `KSI-CNA-07` |
+| Service Configuration (SVC) | 6 / 7 | `KSI-SVC-05` |
+| Monitoring, Logging & Auditing (MLA) | 5 / 6 | `KSI-MLA-02` |
+| Identity & Access Management (IAM) | 7 / 7 | — |
+| Change Management (CMT) | 4 / 4 | — |
+| Recovery Planning (RPL) | 1 / 1 | — |
+| Policy & Inventory (PIY) | 1 / 1 | — |
+| Third-Party Information Resources (TPR) | 1 / 1 | — |
+
+Organizational-only families (no cloud-config evidence): Cybersecurity Education (CED), Incident Reporting (INR).
+<!-- END:ksi-coverage -->
+
+---
+
 ## How it runs
 
 Four pieces, kept deliberately separate:
@@ -158,6 +204,8 @@ The CLI command surface:
 paramify list                  # discovered fetchers (flat)
 paramify catalog               # categories → fetchers → editable fields
 paramify describe <fetcher>    # one fetcher's config / secrets / target fields
+paramify ksi                   # FedRAMP 20x KSI coverage
+paramify doctor   [manifest]   # preflight: Python, required CLIs, manifest secrets
 paramify manifests             # discovered run manifests (manifests/*.yaml)
 paramify validate <manifest>   # validate a manifest without running
 paramify run      <manifest>   # run it
@@ -165,6 +213,21 @@ paramify runs                  # past runs under an output dir (newest first)
 paramify evidence <file>       # read one evidence file (normalizing the envelope)
 paramify upload   [run-dir]    # push a run's evidence to Paramify (default: latest run)
 paramify manifest <sub>        # build/edit a manifest (see below)
+```
+
+Before a real run, `paramify doctor <manifest>` preflights the environment —
+Python, the CLIs each category needs, and whether the manifest's secret env vars
+are set — and exits non-zero if anything's missing, so it drops straight into CI:
+
+```text
+$ paramify doctor examples/minimal_run.yaml
+✅ Python 3.11.9 (need ≥ 3.10)
+
+Manifest secrets (examples/minimal_run.yaml):
+  ❌ okta_phishing_resistant_mfa  missing: OKTA_API_TOKEN, OKTA_ORG_URL
+  ❌ gitlab_ci_cd_pipeline_config  missing: GITLAB_TOKEN_1, GITLAB_TOKEN_2
+
+Issues found — see above.
 ```
 
 Output lands in `<output_dir>/run-<UTC-timestamp>/`, one JSON file per fetcher
@@ -264,6 +327,26 @@ talks Paramify REST v0 over HTTPS only, and reads `PARAMIFY_UPLOAD_API_TOKEN`
 for how to create a Paramify API key with the required permissions. Chaining the two stages is the
 customer's job, not the runner's; `run_and_upload.sh` at the repo root is
 example glue.
+
+---
+
+## Drive it with an AI agent
+
+Every command takes `--json`, and each `paramify manifest` edit returns a stable
+`{ok, path, errors}` object — so an agent can assemble a runnable manifest by
+reading `errors` and closing each gap, no screen-scraping:
+
+```bash
+paramify catalog --json                                  # discover what's available
+paramify manifest add okta_phishing_resistant_mfa --json # → {"ok": false, "errors": [ …missing secrets… ]}
+paramify manifest set-secret okta_phishing_resistant_mfa api_token OKTA_API_TOKEN --json
+# …repeat until:
+paramify validate manifest.yaml --json                   # → {"ok": true, "errors": []}
+```
+
+The repo also ships Claude Code skills under [`.claude/skills/`](.claude/skills/) —
+`create-fetcher`, `wire-manifest`, and `suggest-validator` — so an agent can
+scaffold a new fetcher, wire it into a manifest, or propose a validator directly.
 
 ---
 

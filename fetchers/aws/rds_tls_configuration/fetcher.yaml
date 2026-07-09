@@ -32,5 +32,5 @@ ksis:
   - KSI-SVC-02
 
 evidence_set:
-  reference_id: EVD-RDS-TLS-CONFIG
+  reference_id: EVD-RDS-TLS
   name: RDS TLS Configuration

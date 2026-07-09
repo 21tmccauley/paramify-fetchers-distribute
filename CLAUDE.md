@@ -91,6 +91,11 @@ CLI surface (`paramify <cmd>`, all accept `--json`):
 - `upload [run-dir]` — push one run's evidence to Paramify via the
   `paramify_evidence` uploader (default: latest run under `--output-dir`;
   `--dry-run`/`--config`)
+- `scripts sync` — push each fetcher's entry script to Paramify and CONNECT it
+  to that fetcher's evidence set via the `paramify_scripts` uploader
+  (provisioning, separate from `upload`; `--dry-run`/`--force`/`--reassociate`/
+  `--config`). Reconciles by a marker in the script description; the fetcher.yaml
+  `version` is the update signal, a content hash guards undeclared drift.
 - `manifest <sub>` — build/edit a manifest (`-f/--file`, default
   `./manifest.yaml`; every sub emits `{ok,path,errors}` under `--json`):
   `init [--output-dir DIR]`, `new <name>`, `add <fetcher>`,
@@ -119,7 +124,8 @@ CLI surface (`paramify <cmd>`, all accept `--json`):
   additive change for `api_failures` is the exception, not the start of
   a refactor)
 - Paramify issues uploader (`uploaders/paramify_issues/` is an empty stub;
-  the evidence uploader `uploaders/paramify_evidence/` IS built)
+  the evidence uploader `uploaders/paramify_evidence/` and the scripts uploader
+  `uploaders/paramify_scripts/` are both built)
 - Comparators (`depends_on` is in the schema but the runner doesn't
   honor it yet — only `comparators/_template` exists; logger.py, retry.py,
   dependency_graph.py are still empty stubs)

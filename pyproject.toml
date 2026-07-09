@@ -8,7 +8,10 @@ version = "0.1.0"
 description = "Paramify evidence fetcher framework — discover, build, run, and inspect evidence fetchers."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Proprietary" }
+license = { text = "GPL-3.0-only" }
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+]
 
 # Base runtime: everything the headless `paramify` CLI and the runner need.
 # The TUI is an optional front-end — install its extra to use `paramify tui`.

@@ -66,8 +66,12 @@ def main() -> int:
     readme = REPO_ROOT / "README.md"
     text = readme.read_text()
     if BEGIN not in text or END not in text:
-        print(f"error: markers {BEGIN} / {END} not found in README.md", file=sys.stderr)
-        return 1
+        # Coverage publishing is currently parked — the README has no
+        # ksi-coverage block. We're not yet confident enough in the KSI mapping
+        # to publish it; `paramify ksi` still shows live numbers. Re-add the
+        # BEGIN/END markers to the README to resume publishing, then rerun this.
+        print("ksi-coverage markers not in README.md — coverage publishing is parked; nothing to do.")
+        return 0
 
     cov = api.ksi_coverage(REPO_ROOT)
     block = build_block(cov)

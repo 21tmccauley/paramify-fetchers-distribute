@@ -475,3 +475,7 @@ managers, or ambient cloud identity) flows — is in
 | [`docs/run_manifest_reference.md`](docs/run_manifest_reference.md) | Manifest format |
 | [`docs/config_injection_design.md`](docs/config_injection_design.md) | Platform/config/auth model |
 | [`docs/design.md`](docs/design.md) | Why the framework is shaped this way + current state of the work |
+
+## License
+
+Licensed under the GNU General Public License v3.0 — see [`LICENSE`](LICENSE).

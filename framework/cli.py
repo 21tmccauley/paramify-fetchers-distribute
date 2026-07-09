@@ -887,7 +887,13 @@ def tui_cmd(
     try:
         from framework.tui.__main__ import launch
     except ImportError as e:
-        _err(f"The TUI requires the 'tui' extra (textual). Install it:  pip install 'paramify[tui]'\n  ({e})")
+        _err(
+            "The TUI requires the 'tui' extra (textual). Install it from the repo "
+            "root:  pip install -e '.[tui]'\n"
+            "  (do NOT run `pip install 'paramify[tui]'` — this project isn't on "
+            "PyPI, and that name resolves to an unrelated package.)\n"
+            f"  ({e})"
+        )
         raise typer.Exit(1)
     launch(manifest, at)
 

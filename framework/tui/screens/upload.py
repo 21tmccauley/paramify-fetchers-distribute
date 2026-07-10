@@ -15,6 +15,7 @@ from textual.message import Message
 from textual.widgets import Button, DataTable, RichLog, Static
 
 from framework import api
+from framework.tui import palette
 from framework.tui.modals import ConfirmModal
 
 
@@ -41,16 +42,22 @@ class UploadPage(Vertical):
             yield Static("", id="upload-banner")
         with Horizontal(id="upload-body"):
             with Vertical(id="upload-summary-panel", classes="panel"):
-                yield Static("ready to upload", classes="panel-title")
                 yield DataTable(id="upload-summary")
             with Vertical(id="upload-log-panel", classes="panel"):
-                yield Static("upload log", classes="panel-title")
                 yield RichLog(id="upload-log", markup=False, wrap=True, highlight=False)
+                yield Static(
+                    f"upload progress streams here — [bold {palette.ACCENT}]ctrl+u[/] to upload",
+                    classes="empty-hint",
+                )
 
     def on_mount(self) -> None:
         self._uploading = False
         self._run_dir: str | None = None
         self._preflight: dict | None = None
+        self.query_one("#upload-summary-panel", Vertical).border_title = "ready to upload"
+        log_panel = self.query_one("#upload-log-panel", Vertical)
+        log_panel.border_title = "log"
+        log_panel.set_class(True, "empty")
         table = self.query_one("#upload-summary", DataTable)
         table.cursor_type = "row"
         table.zebra_stripes = True
@@ -87,8 +94,8 @@ class UploadPage(Vertical):
         try:
             runs = api.list_runs(out)
         except Exception as exc:
-            self._set_banner(Text(f"cannot list runs: {exc}", style="red"))
-            table.add_row("status", Text(f"cannot list runs: {exc}", style="red"))
+            self._set_banner(Text(f"cannot list runs: {exc}", style=palette.FAIL))
+            table.add_row("status", Text(f"cannot list runs: {exc}", style=palette.FAIL))
             return
 
         if not runs:
@@ -106,22 +113,22 @@ class UploadPage(Vertical):
         try:
             preflight = api.upload_preflight(self._run_dir, self.app.root_path)
         except Exception as exc:
-            self._set_banner(Text(f"upload setup failed: {exc}", style="red"))
-            table.add_row("preflight", Text(str(exc), style="red"))
+            self._set_banner(Text(f"upload setup failed: {exc}", style=palette.FAIL))
+            table.add_row("preflight", Text(str(exc), style=palette.FAIL))
             return
 
         self._preflight = preflight
         table.add_row("Paramify API", preflight["base_url"])
-        table.add_row("API token", Text("present", style="green") if preflight["token_present"] else Text("missing", style="red"))
+        table.add_row("API token", palette.pill("present", "ok") if preflight["token_present"] else palette.pill("missing", "fail"))
         table.add_row("upload files", str(preflight["file_count"]))
 
         if preflight["ok"]:
             upload.disabled = False
-            self._set_banner(Text("ready — upload after reviewing the evidence", style="green"))
+            self._set_banner(Text("ready — upload after reviewing the evidence", style=palette.OK))
         else:
             for err in preflight["errors"]:
-                table.add_row("preflight error", Text(err, style="red"))
-            self._set_banner(Text("upload preflight failed", style="red"))
+                table.add_row("preflight error", Text(err, style=palette.FAIL))
+            self._set_banner(Text("upload preflight failed", style=palette.FAIL))
 
     @staticmethod
     def _result_text(run: dict) -> Text:
@@ -129,10 +136,10 @@ class UploadPage(Vertical):
         ok = run.get("ok", 0)
         total = ok + fail
         if not run.get("complete", True):
-            return Text("incomplete", style="yellow")
+            return Text("incomplete", style=palette.WARN)
         if fail:
-            return Text(f"{ok}/{total} ok, {fail} failed", style="yellow")
-        return Text(f"{ok}/{total} ok", style="green")
+            return Text(f"{ok}/{total} ok, {fail} failed", style=palette.WARN)
+        return Text(f"{ok}/{total} ok", style=palette.OK)
 
     # -- actions ---------------------------------------------------------- #
 
@@ -171,8 +178,9 @@ class UploadPage(Vertical):
         self._uploading = True
         self.query_one("#upload-refresh", Button).disabled = True
         self.query_one("#upload-submit", Button).disabled = True
+        self.query_one("#upload-log-panel", Vertical).set_class(False, "empty")
         self.query_one("#upload-log", RichLog).clear()
-        self._set_banner(Text("uploading to Paramify...", style="yellow"))
+        self._set_banner(Text("uploading to Paramify...", style=palette.WARN))
         self._upload_worker(run_dir, self.app.root_path)
 
     @work(thread=True, exclusive=True)
@@ -197,17 +205,17 @@ class UploadPage(Vertical):
 
         if etype == "upload_start":
             mode = " (dry-run)" if ev.get("dry_run") else ""
-            self._set_banner(Text(f"uploading {ev.get('files', 0)} file(s) to {ev.get('base_url', '')}{mode}", style="yellow"))
+            self._set_banner(Text(f"uploading {ev.get('files', 0)} file(s) to {ev.get('base_url', '')}{mode}", style=palette.WARN))
             log.write(Text(f"upload {ev.get('files', 0)} file(s) from {ev.get('run_dir', '')}{mode}", style="bold"))
 
         elif etype == "upload_file":
             outcome = ev.get("outcome")
             if outcome == "uploaded":
-                icon, style = "OK", "green"
+                icon, style = "OK", palette.OK
             elif outcome in ("skipped_duplicate", "skipped_failed", "would_upload"):
-                icon, style = "SKIP", "yellow"
+                icon, style = "SKIP", palette.WARN
             else:
-                icon, style = "FAIL", "red"
+                icon, style = "FAIL", palette.FAIL
             ref = f"  set={ev.get('reference_id')}" if ev.get("reference_id") else ""
             reason = ev.get("reason") or ev.get("error")
             suffix = f"  {reason}" if reason else ""
@@ -220,15 +228,15 @@ class UploadPage(Vertical):
             self._uploading = False
             self.query_one("#upload-refresh", Button).disabled = False
             self.query_one("#upload-submit", Button).disabled = self._preflight is None or not self._preflight.get("ok")
-            log.write(Text(f"upload failed: {ev.get('error', '')}", style="bold red"))
-            self._set_banner(Text(f"upload failed: {ev.get('error', '')}", style="red"))
+            log.write(Text(f"upload failed: {ev.get('error', '')}", style=f"bold {palette.FAIL}"))
+            self._set_banner(Text(f"upload failed: {ev.get('error', '')}", style=palette.FAIL))
 
     def _finalize_upload(self, ev: dict) -> None:
         self._uploading = False
         self.query_one("#upload-refresh", Button).disabled = False
         self.query_one("#upload-submit", Button).disabled = False
         ok = ev.get("ok")
-        style = "green" if ok else "red"
+        style = palette.OK if ok else palette.FAIL
         msg = Text(
             "upload complete — "
             f"uploaded={ev.get('uploaded', 0)} "

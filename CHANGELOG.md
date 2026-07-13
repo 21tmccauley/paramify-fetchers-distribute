@@ -10,6 +10,44 @@ schemas and the `paramify` CLI — not the internal code.
 
 ## [Unreleased]
 
+## [0.3.0-rc.1] - 2026-07-13
+
+The distributable-install release candidate: the tool now works without a
+clone. No schema changes — the envelope `schema_version` stays `1.0` and the
+`fetcher.yaml` / category / manifest contracts are untouched.
+
+### Added
+
+- **The overlay distribution model** (`docs/distribution_design.md`). Built-ins
+  ship read-only inside the package (`framework/_bundled/`); user-created
+  fetchers and overrides live in `$PARAMIFY_HOME/fetchers/` and shadow
+  built-ins via an ordered search path (`$PARAMIFY_FETCHERS_PATH` → dev
+  checkout → user dir → installed bundle). Upgrades never write to the user
+  dir. The earlier workspace-sync design is preserved under `docs/deferred/`.
+- `paramify create <category>/<name>` — scaffold a new fetcher into your user
+  dir from the shipped template; `--category-file` also scaffolds the category
+  file for a brand-new platform.
+- `paramify customize <fetcher>` — copy-on-write override of a built-in, with
+  a sidecar so `paramify doctor` can flag the override when the original
+  changes upstream.
+- `paramify doctor` gains a distribution section: tool version, install path,
+  user dir, content roots, shadows, stale/orphaned overrides, and invalid
+  fetchers.
+- **The wheel is a real artifact**: schemas, the KSI reference, TUI styles,
+  the uploader, and the full content bundle ship in it — `pipx install` works
+  from a bare machine. A Homebrew tap formula template lives under
+  `packaging/brew/`.
+
+### Changed
+
+- Discovery is refuse-don't-crash: a broken `fetcher.yaml` is skipped and
+  reported instead of aborting every command; cross-root name collisions are
+  reported as shadows, never resolved silently.
+- Fetcher child processes get the running interpreter's `bin/` prepended to
+  `PATH`, so venv-installed CLIs (e.g. a pipx-injected `checkov`) resolve.
+- The TUI works without a checkout (installed mode); the missing-textual hint
+  now gives correct pipx/pip commands.
+
 ## [0.2.1-beta] - 2026-07-10
 
 ### Changed
@@ -72,6 +110,7 @@ change before 1.0 (see [`docs/versioning.md`](docs/versioning.md)).
 - TUI restyled — border titles, status pills, denser controls, and hatched empty
   states.
 
-[Unreleased]: https://github.com/paramify/paramify-fetchers/compare/v0.2.1-beta...HEAD
+[Unreleased]: https://github.com/paramify/paramify-fetchers/compare/v0.3.0-rc.1...HEAD
+[0.3.0-rc.1]: https://github.com/paramify/paramify-fetchers/compare/v0.2.1-beta...v0.3.0-rc.1
 [0.2.1-beta]: https://github.com/paramify/paramify-fetchers/compare/v0.2.0-beta...v0.2.1-beta
 [0.2.0-beta]: https://github.com/paramify/paramify-fetchers/releases/tag/v0.2.0-beta

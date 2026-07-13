@@ -3,7 +3,7 @@
 Lists the available run manifests and lets you pick one to drive the rest of
 the session (view / edit / run). Tokyo Night palette + PARAMIFY logo under a
 sweeping color-gradient sheen, with an animated verification readout of the
-startup checks (repo root, catalog, manifests, uploader): each line types on,
+startup checks (content roots, catalog, manifests, uploader): each line types on,
 spins, then settles to its answer — the results themselves come from the
 discovery the app already ran. Preview it standalone with:
 
@@ -13,6 +13,7 @@ discovery the app already ran. Preview it standalone with:
 from __future__ import annotations
 
 import colorsys
+import importlib.util
 import math
 import time
 from datetime import datetime, timezone
@@ -49,7 +50,7 @@ _FPS = 30
 
 # Verification readout — animated reveal of the startup checks.
 # check states: 1 = ok, -1 = no answer (muted), -2 = failed (red)
-_CHECKS = ["repo root", "fetcher catalog", "run manifests", "evidence uploader"]
+_CHECKS = ["content roots", "fetcher catalog", "run manifests", "evidence uploader"]
 _REVEAL0 = 0.45   # seconds before the first check line appears
 _STAGGER = 0.32   # delay between successive lines
 _TYPE_CPS = 70    # label typewriter speed, chars/second
@@ -211,28 +212,36 @@ class WelcomeScreen(Screen):
     def _resolve_checks(self) -> None:
         """Fill in the verification answers from the discovery the app already
         ran (root/catalog on the app, manifests from this screen's own scan).
-        The animation then reveals them on its own schedule."""
+        The animation then reveals them on its own schedule.
+
+        A checkout is one way to have content, not a requirement: installed
+        (pipx/brew), root_path is None and fetchers come from the bundled
+        snapshot and the user dir — that's healthy, not a failure."""
         root = getattr(self.app, "root_path", None)
+        cat = getattr(self.app, "catalog_data", None)
         results: Dict[int, Tuple[int, str]] = {}
-        if root is None:
-            results[0] = (-2, "✗ not found")
-            results[1] = (-1, "—")
-            results[3] = (-1, "—")
-        else:
+        roots = (cat or {}).get("roots") or []
+        if root is not None:
             results[0] = (1, f"{Path(root).name}/")
-            cat = getattr(self.app, "catalog_data", None)
-            if cat:
-                results[1] = (
-                    1, f"✓ {cat['fetcher_count']} fetchers · {len(cat['categories'])} categories"
-                )
-            else:
-                results[1] = (-2, "✗ load failed")
-            uploader = Path(root) / "uploaders" / "paramify_evidence"
-            results[3] = (1, "✓ paramify_evidence") if uploader.is_dir() else (-1, "not present")
+        elif roots:
+            results[0] = (1, "✓ installed bundle" if len(roots) == 1
+                          else f"✓ installed · {len(roots)} roots")
+        else:
+            results[0] = (-2, "✗ none found")
+        if cat:
+            results[1] = (
+                1, f"✓ {cat['fetcher_count']} fetchers · {len(cat['categories'])} categories"
+            )
+        else:
+            results[1] = (-2, "✗ load failed")
+        if root is not None:
+            uploader_ok = (Path(root) / "uploaders" / "paramify_evidence").is_dir()
+        else:
+            uploader_ok = importlib.util.find_spec("uploaders.paramify_evidence") is not None
+        results[3] = (1, "✓ paramify_evidence") if uploader_ok else (-1, "not present")
         n = len(self._manifests or [])
         results[2] = (1, f"✓ {n} discovered") if n else (-1, "none yet")
         self._check_results = results
-        cat = getattr(self.app, "catalog_data", None)
         self._summary_parts = [
             f"{cat['fetcher_count']} fetchers" if cat else "catalog unavailable",
             f"{n} manifest{'' if n == 1 else 's'}" if n else "no manifests yet",
@@ -360,10 +369,6 @@ class WelcomeScreen(Screen):
         self._open(self._selected())
 
     def action_new(self) -> None:
-        if not self.app.root_path:
-            self.notify("Cannot create a manifest: repo root not found.", severity="error")
-            return
-
         def done(result: Optional[dict]) -> None:
             name = (result or {}).get("new manifest", {}).get("name")
             if not name:

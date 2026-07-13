@@ -10,6 +10,15 @@ schemas and the `paramify` CLI — not the internal code.
 
 ## [Unreleased]
 
+### Fixed
+
+- The TUI welcome screen's startup checks no longer fail on an installed
+  (pipx/brew) copy: the checkout-only "repo root" check is now "content
+  roots" (green when fetchers come from the installed bundle and/or user
+  dir), and the catalog/uploader checks answer without a checkout. Creating
+  a manifest from the welcome screen also works installed (lands in
+  `./manifests/`).
+
 ## [0.3.0-rc.1] - 2026-07-13
 
 The distributable-install release candidate: the tool now works without a

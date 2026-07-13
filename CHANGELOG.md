@@ -10,6 +10,8 @@ schemas and the `paramify` CLI — not the internal code.
 
 ## [Unreleased]
 
+## [0.3.0-rc.2] - 2026-07-13
+
 ### Fixed
 
 - The TUI welcome screen's startup checks no longer fail on an installed
@@ -119,7 +121,8 @@ change before 1.0 (see [`docs/versioning.md`](docs/versioning.md)).
 - TUI restyled — border titles, status pills, denser controls, and hatched empty
   states.
 
-[Unreleased]: https://github.com/paramify/paramify-fetchers/compare/v0.3.0-rc.1...HEAD
+[Unreleased]: https://github.com/paramify/paramify-fetchers/compare/v0.3.0-rc.2...HEAD
+[0.3.0-rc.2]: https://github.com/paramify/paramify-fetchers/compare/v0.3.0-rc.1...v0.3.0-rc.2
 [0.3.0-rc.1]: https://github.com/paramify/paramify-fetchers/compare/v0.2.1-beta...v0.3.0-rc.1
 [0.2.1-beta]: https://github.com/paramify/paramify-fetchers/compare/v0.2.0-beta...v0.2.1-beta
 [0.2.0-beta]: https://github.com/paramify/paramify-fetchers/releases/tag/v0.2.0-beta

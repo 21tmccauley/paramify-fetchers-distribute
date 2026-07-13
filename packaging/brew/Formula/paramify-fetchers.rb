@@ -78,6 +78,14 @@ class ParamifyFetchers < Formula
     sha256 "FILL_ME"
   end
 
+  # The TUI is bundled deliberately: brew is the batteries-included path — it
+  # already declares the cloud CLIs, so `paramify tui` must work out of the
+  # box. (pipx users opt in via the [tui] extra instead.)
+  resource "textual" do
+    url "FILL_ME"
+    sha256 "FILL_ME"
+  end
+
   def install
     # pip install of the source tree runs the build_py hook, so the venv gets
     # framework/_bundled (fetchers + examples) — the content built-ins run from.
@@ -89,5 +97,7 @@ class ParamifyFetchers < Formula
     # no checkout, no user dir: catalog must resolve from the installed bundle
     output = shell_output("#{bin}/paramify catalog --json")
     assert_match "_bundled", output
+    # the TUI is bundled — importing it must succeed in the venv
+    system libexec/"bin/python", "-c", "import textual"
   end
 end

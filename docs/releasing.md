@@ -103,6 +103,12 @@ Use `-rc.N` (release candidate) or `-beta.N`. These sort before the final
   pipx install https://github.com/paramify/paramify-fetchers/releases/download/vX.Y.Z/paramify_fetchers-X.Y.Z-py3-none-any.whl
   ```
 
+  Upgrading to a new release is `pipx install --force <new wheel url>`.
+  Caveat (found in dist testing): pipx ≥ 1.15 with the uv backend can fail
+  `--force` into an existing venv (`uv venv` refuses to overwrite, exit 1,
+  old version left in place) — prepend `UV_VENV_CLEAR=1`, or
+  `pipx uninstall paramify-fetchers` first.
+
   (The former blocker — cwd-repo-root schemas, unshipped fetchers — was removed
   by the overlay distribution work; see `docs/distribution_design.md`.)
 - **Homebrew tap** — the Mac/Linux convenience layer on top; can also declare

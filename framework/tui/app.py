@@ -52,7 +52,7 @@ class FetcherApp(App):
 
     def _discover(self) -> None:
         try:
-            self.root_path = api.find_repo_root(self._root_override)
+            self.root_path = api.locate_root(self._root_override)
             self.catalog_data = api.catalog(self.root_path)
         except Exception as exc:  # repo-root discovery / fetcher load failures
             self.catalog_data = None

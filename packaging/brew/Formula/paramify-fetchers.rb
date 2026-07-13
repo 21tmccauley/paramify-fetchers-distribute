@@ -16,6 +16,7 @@ class ParamifyFetchers < Formula
   license "GPL-3.0-only"
 
   depends_on "python@3.13"
+  depends_on "rust" => :build # rpds-py (via jsonschema) builds from sdist
 
   # External CLIs the fetcher catalog shells out to — the one thing pipx can't
   # declare (docs/distribution_design.md §9). Heavy but complete; trim to

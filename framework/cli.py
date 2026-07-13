@@ -937,7 +937,13 @@ def tui_cmd(
     try:
         from framework.tui.__main__ import launch
     except ImportError as e:
-        _err(f"The TUI requires the 'tui' extra (textual). Install it:  pip install 'paramify[tui]'\n  ({e})")
+        _err(
+            "The TUI requires the 'tui' extra (textual). Install it:\n"
+            "  pipx:  pipx install --force 'paramify-fetchers[tui]'   "
+            "(or: pipx inject paramify-fetchers textual)\n"
+            "  pip:   pip install 'paramify-fetchers[tui]'\n"
+            f"  ({e})"
+        )
         raise typer.Exit(1)
     launch(manifest, at)
 

@@ -88,8 +88,6 @@ class FetcherApp(App):
 
     def open_manifest_picker(self) -> None:
         """Quick-picker overlay to swap the active manifest without leaving the workspace."""
-        if self.root_path is None:
-            return
         options = []
         for m in api.list_manifests(self.root_path):
             flag = f"  ⚠ {m['issues']}" if m["issues"] else ""
